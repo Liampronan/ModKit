@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import { createHash, createHmac } from 'node:crypto'
 import { ModKitError } from '../errors.js'
 
