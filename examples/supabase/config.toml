@@ -1,0 +1,6 @@
+# Disable Supabase's built-in gateway JWT verification for the ModKit function
+# so both client Supabase Auth JWTs and Database Webhook requests (`x-modkit-webhook-secret`)
+# reach ModKit's own authenticator and webhook verifier.
+[functions.modkit]
+verify_jwt = false
+entrypoint = "./functions/modkit/index.ts"

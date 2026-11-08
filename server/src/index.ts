@@ -54,3 +54,26 @@ export {
   type SupabaseStorageHelper,
   type SupabaseStorageOptions,
 } from './adapters/storage.js'
+export {
+  extractBearerToken,
+  staticTokens,
+  supabaseJwt,
+  verifySecretConstantTime,
+  type JwtClaims,
+  type ModKitAuthPrincipal,
+  type ModKitAuthenticator,
+  type SupabaseJwtOptions,
+} from './auth.js'
+export {
+  createModKitServer,
+  type DatabaseWebhookPayload,
+  type ExtractedContentItem,
+  type ModKitContentExtractor,
+  type ModKitServerOptions,
+} from './server.js'
+export {
+  runConformanceSuite,
+  type ConformanceStepResult,
+  type ConformanceSuiteResult,
+  type RunConformanceSuiteOptions,
+} from './conformance.js'
