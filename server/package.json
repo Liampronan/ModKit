@@ -1,0 +1,57 @@
+{
+  "name": "modkit-server",
+  "version": "1.0.0-beta.1",
+  "description": "Self-hosted /v1 server handler, content moderation classifiers, notification sinks, Postgres store, and CLI for ModKit (App Store Guideline 1.2).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "modkit": "dist/cli.js",
+    "modkit-server": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "migrations"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "test": "npm run build && node --test --experimental-strip-types tests/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Liampronan/ModKit.git",
+    "directory": "server"
+  },
+  "homepage": "https://github.com/Liampronan/ModKit#readme",
+  "bugs": {
+    "url": "https://github.com/Liampronan/ModKit/issues"
+  },
+  "author": "Liam Ronan",
+  "keywords": [
+    "moderation",
+    "ugc",
+    "app-store-guideline-1-2",
+    "supabase",
+    "swift",
+    "modkit"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "postgres": "^3.4.9"
+  }
+}
