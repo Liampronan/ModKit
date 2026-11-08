@@ -1,0 +1,21 @@
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log*
+server/dist/
+*.tgz
+.npmrc
+
+# SwiftPM & Xcode
+.build/
+.swiftpm/
+Package.resolved
+DerivedData/
+xcuserdata/
+*.xcresult/
+
+# Environment & Local Agent Config
+.env
+.env.*
+.agents/
