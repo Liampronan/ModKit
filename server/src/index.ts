@@ -77,3 +77,9 @@ export {
   type ConformanceSuiteResult,
   type RunConformanceSuiteOptions,
 } from './conformance.js'
+export {
+  isCliEntrypoint,
+  runCli,
+  type CliIo,
+  type ClosableModKitStore,
+} from './cli.js'
