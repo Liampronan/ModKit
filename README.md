@@ -47,7 +47,7 @@ See [`examples/supabase/functions/modkit/index.ts`](./examples/supabase/function
 
 ### 3. Add `ModKit` to Your iOS App
 
-Add `https://github.com/Liampronan/ModKit` (`1.0.0-beta.2`) in Xcode or `Package.swift`:
+Add `https://github.com/Liampronan/ModKit` (`1.0.0-beta.3`) in Xcode or `Package.swift`:
 
 ```swift
 import ModKit
