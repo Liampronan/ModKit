@@ -1,6 +1,6 @@
 {
   "name": "modkit-server",
-  "version": "1.0.0-beta.1",
+  "version": "1.0.0-beta.2",
   "description": "Self-hosted /v1 server handler, content moderation classifiers, notification sinks, Postgres store, and CLI for ModKit (App Store Guideline 1.2).",
   "type": "module",
   "main": "./dist/index.js",
