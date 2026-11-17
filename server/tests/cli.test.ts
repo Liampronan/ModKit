@@ -133,6 +133,29 @@ test('CLI: reports list, reports resolve (remove|dismiss|ban), and bans add/remo
   })
   assert.equal(banRemoveCode, 0)
   assert.equal(await store.isBanned('author-3'), false)
+
+  // 5. CLI: users delete purges user data and preserves bans unless --delete-ban is set
+  await store.acceptTerms({ userId: 'author-2', termsVersion: '2026-11-01' })
+  const delOut: string[] = []
+  const delCode = await runCli(['users', 'delete', 'author-2', '--db', 'postgres://mock'], {
+    storeFactory: () => store,
+    stdout: (l) => delOut.push(l),
+    stderr: (l) => assert.fail(l),
+  })
+  assert.equal(delCode, 0)
+  assert.ok(delOut.some((l) => l.includes('Deleted ModKit data for user author-2')))
+  assert.equal(await store.isBanned('author-2'), true)
+
+  const delBanCode = await runCli(
+    ['users', 'delete', 'author-2', '--delete-ban', '--db', 'postgres://mock'],
+    {
+      storeFactory: () => store,
+      stdout: () => {},
+      stderr: (l) => assert.fail(l),
+    },
+  )
+  assert.equal(delBanCode, 0)
+  assert.equal(await store.isBanned('author-2'), false)
 })
 
 test('CLI: modkit conformance --server runs end-to-end checks', async () => {

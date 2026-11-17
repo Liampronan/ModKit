@@ -7,9 +7,11 @@ import {
   type AddBanInput,
   type BlockUserInput,
   type CreateReportInput,
+  type DeleteUserDataInput,
   type ListReportsFilter,
   type ModKitBanRecord,
   type ModKitBlockRecord,
+  type ModKitDeleteUserDataResult,
   type ModKitHiddenItem,
   type ModKitItemRecord,
   type ModKitReportRecord,
@@ -403,6 +405,61 @@ export function memoryStore(): ModKitStore {
       return Array.from(bansByUser.values())
         .sort((a, b) => b.created_at.localeCompare(a.created_at))
         .map((b) => ({ ...b }))
+    },
+
+    async deleteUserData(input: string | DeleteUserDataInput): Promise<ModKitDeleteUserDataResult> {
+      const rawUserId = typeof input === 'string' ? input : input.userId
+      const deleteBan = typeof input === 'string' ? false : Boolean(input.deleteBan)
+      const userId = rawUserId.trim()
+      if (!userId) {
+        throw new ModKitError(400, 'invalid_user_id', 'userId must be a non-empty string.')
+      }
+
+      const termsMap = termsByUser.get(userId)
+      const termsDeleted = termsMap ? termsMap.size : 0
+      termsByUser.delete(userId)
+
+      let blocksDeleted = 0
+      const outgoingBlocks = blocksByUser.get(userId)
+      if (outgoingBlocks) {
+        blocksDeleted += outgoingBlocks.size
+        blocksByUser.delete(userId)
+      }
+      for (const [, userBlocks] of blocksByUser.entries()) {
+        if (userBlocks.delete(userId)) {
+          blocksDeleted += 1
+        }
+      }
+
+      let reportsDeleted = 0
+      for (const [id, report] of reportsById.entries()) {
+        if (report.reporter_id === userId) {
+          reportsById.delete(id)
+          reportsDeleted += 1
+        }
+      }
+
+      let itemsDeleted = 0
+      for (const [key, item] of itemsByKey.entries()) {
+        if (item.author_id === userId) {
+          itemsByKey.delete(key)
+          itemsDeleted += 1
+        }
+      }
+
+      let bansDeleted = 0
+      if (deleteBan && bansByUser.delete(userId)) {
+        bansDeleted = 1
+      }
+
+      return {
+        user_id: userId,
+        terms_deleted: termsDeleted,
+        blocks_deleted: blocksDeleted,
+        reports_deleted: reportsDeleted,
+        items_deleted: itemsDeleted,
+        bans_deleted: bansDeleted,
+      }
     },
   }
 }

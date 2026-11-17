@@ -73,6 +73,40 @@ ModerationSettingsSection(store: moderationStore)
 
 ---
 
+## 24-Hour Report Handling & Account Deletion
+
+### 24-Hour Report Triage (Guideline 1.2)
+
+When a user submits a report, ModKit notifies your configured Slack or Email sink immediately. Resolve open reports within the 24-hour App Store SLA via the operator CLI:
+
+```bash
+npx modkit-server reports list --db "$DATABASE_URL" --status open
+npx modkit-server reports resolve <report-id> --action remove --note "Removed objectionable photo" --db "$DATABASE_URL"
+```
+
+### Account Deletion (Guideline 5.1.1(v))
+
+ModKit keys users by `text` without a foreign key to `auth.users`. When deleting a user's account from your own `delete-user` Edge Function or backend, purge their ModKit records via the `SECURITY DEFINER` SQL function, the store method, or the CLI:
+
+```sql
+-- From SQL / Supabase service_role RPC:
+SELECT modkit.delete_user_data('user-uuid-here');
+```
+
+```ts
+// From modkit-server store:
+await store.deleteUserData(userId)
+```
+
+```bash
+# From the operator CLI:
+npx modkit-server users delete <user-id> --db "$DATABASE_URL"
+```
+
+This deletes the user's `terms_acceptances`, `blocks` (both directions), filed `reports`, and authored `items`. By default, **`modkit.bans` rows are preserved** (`delete_ban = false`) so banned users retain their ban record and audit trail; pass `modkit.delete_user_data(user_id, true)`, `store.deleteUserData({ userId, deleteBan: true })`, or `--delete-ban` if you also want to remove any ban row.
+
+---
+
 ## Reference & Security Docs
 
 - **[`MODERATION_SPEC.md`](./MODERATION_SPEC.md)** — Complete Postgres schema, `/v1` wire spec, Swift API contract, and `trash-app` adoption guide.

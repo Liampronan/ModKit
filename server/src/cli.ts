@@ -250,6 +250,36 @@ export async function runCli(argv: string[], io: CliIo = {}): Promise<number> {
       return 1
     }
 
+    if (group === 'users' || group === 'delete-user') {
+      const isDirectAlias = group === 'delete-user'
+      if (!isDirectAlias && subcommand !== 'delete') {
+        stderr(`Error: Unknown users subcommand: ${subcommand ?? ''}`)
+        return 1
+      }
+
+      const flagArgs = isDirectAlias ? (subcommand ? [subcommand, ...rest] : rest) : rest
+      const { positional, flags } = parseFlags(flagArgs)
+      const userId = positional[0]
+      const deleteBan = flags.get('delete-ban') === 'true' || flags.get('include-bans') === 'true'
+      const dbUrl = flags.get('db') ?? process.env.DATABASE_URL
+
+      if (!userId || !dbUrl) {
+        stderr('Error: Usage: modkit users delete <user-id> [--delete-ban] --db <url>')
+        return 1
+      }
+
+      const store = createStore(dbUrl)
+      try {
+        const result = await store.deleteUserData({ userId, deleteBan })
+        stdout(
+          `Deleted ModKit data for user ${result.user_id} (terms=${result.terms_deleted}, blocks=${result.blocks_deleted}, reports=${result.reports_deleted}, items=${result.items_deleted}, bans=${result.bans_deleted})`,
+        )
+        return 0
+      } finally {
+        await store.close?.()
+      }
+    }
+
     if (group === 'conformance') {
       const allArgs = subcommand ? [subcommand, ...rest] : rest
       const { flags } = parseFlags(allArgs)
@@ -337,6 +367,7 @@ Usage:
   modkit bans add <user-id> --reason "..." [--expires-at <iso>] --db <url>
   modkit bans remove <user-id> --db <url>
   modkit bans list --db <url>
+  modkit users delete <user-id> [--delete-ban] --db <url>
   modkit conformance --server <url> [--token <jwt>] [--webhook-secret <secret>]`)
 }
 
