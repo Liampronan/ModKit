@@ -108,13 +108,20 @@ public final class ModerationStore {
 
     /// Optimistically hides the item immediately, calls `onHide`, and submits the report to the backend.
     public func report(_ input: ModKitReportInput, onHide: (() -> Void)? = nil) async throws {
+        let normalizedInput = ModKitReportInput(
+            targetType: input.targetType,
+            targetId: input.targetId,
+            targetAuthorId: input.targetAuthorId,
+            reason: input.reason,
+            details: input.details
+        )
         hiddenItems.insert(
-            ModKitHiddenItem(targetType: input.targetType, targetId: input.targetId)
+            ModKitHiddenItem(targetType: normalizedInput.targetType, targetId: normalizedInput.targetId)
         )
         persistToUserDefaults()
         onHide?()
         do {
-            try await client.submitReport(input)
+            try await client.submitReport(normalizedInput)
             error = nil
         } catch {
             self.error = error
@@ -124,12 +131,12 @@ public final class ModerationStore {
 
     /// Optimistically adds `userId` to `blockedUserIds` immediately, calls `onHide`, and sends block to backend.
     public func blockUser(_ userId: String, onHide: (() -> Void)? = nil) async throws {
-        let normalized = userId.lowercased()
+        let normalized = ModKitIdentifier.normalizeUserId(userId)
         blockedUserIds.insert(normalized)
         persistToUserDefaults()
         onHide?()
         do {
-            try await client.blockUser(userId)
+            try await client.blockUser(normalized)
             error = nil
         } catch {
             self.error = error
@@ -139,11 +146,11 @@ public final class ModerationStore {
 
     /// Removes `userId` from `blockedUserIds` and sends unblock to backend.
     public func unblockUser(_ userId: String) async throws {
-        let normalized = userId.lowercased()
+        let normalized = ModKitIdentifier.normalizeUserId(userId)
         blockedUserIds = Set(blockedUserIds.filter { $0.lowercased() != normalized })
         persistToUserDefaults()
         do {
-            try await client.unblockUser(userId)
+            try await client.unblockUser(normalized)
             error = nil
         } catch {
             self.error = error

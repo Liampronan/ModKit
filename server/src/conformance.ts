@@ -90,14 +90,16 @@ export async function runConformanceSuite(
     }
   })
 
-  // 4. POST /v1/blocks blocks another user and rejects self-block
+  // 4. POST /v1/blocks blocks another user (normalizing uppercase UUIDs) and rejects self-block
   const blockedId = '99999999-0000-0000-0000-000000000002'
-  await runStep('POST /v1/blocks blocks target user and rejects self-block', async () => {
+  const uppercaseBlockedId = '99999999-0000-0000-0000-ABCDEFABCDEF'
+  const lowercaseBlockedId = uppercaseBlockedId.toLowerCase()
+  await runStep('POST /v1/blocks blocks target user (normalizing uppercase UUIDs) and rejects self-block', async () => {
     if (userAId) {
       const selfRes = await fetchFn(`${baseUrl}/v1/blocks`, {
         method: 'POST',
         headers: authHeaders(options.userAToken),
-        body: JSON.stringify({ blocked_user_id: userAId }),
+        body: JSON.stringify({ blocked_user_id: userAId.toUpperCase() }),
       })
       if (selfRes.status !== 400) {
         throw new Error(`Expected 400 on self-block, got ${selfRes.status}`)
@@ -107,14 +109,23 @@ export async function runConformanceSuite(
     const res = await fetchFn(`${baseUrl}/v1/blocks`, {
       method: 'POST',
       headers: authHeaders(options.userAToken),
-      body: JSON.stringify({ blocked_user_id: blockedId }),
+      body: JSON.stringify({ blocked_user_id: uppercaseBlockedId }),
     })
     if (res.status !== 200) {
       throw new Error(`Expected 200, got ${res.status}`)
     }
     const body = (await res.json()) as { blocked_user_id?: string }
-    if (body.blocked_user_id !== blockedId) {
-      throw new Error('Invalid /v1/blocks response')
+    if (body.blocked_user_id !== lowercaseBlockedId) {
+      throw new Error(`Expected normalized lowercase blocked_user_id "${lowercaseBlockedId}", got "${body.blocked_user_id}"`)
+    }
+
+    const res2 = await fetchFn(`${baseUrl}/v1/blocks`, {
+      method: 'POST',
+      headers: authHeaders(options.userAToken),
+      body: JSON.stringify({ blocked_user_id: blockedId }),
+    })
+    if (res2.status !== 200) {
+      throw new Error(`Expected 200, got ${res2.status}`)
     }
   })
 
@@ -152,7 +163,7 @@ export async function runConformanceSuite(
     if (!state.accepted_terms_versions.includes('2026-11-01')) {
       throw new Error('accepted_terms_versions missing 2026-11-01')
     }
-    if (!state.blocked_user_ids.includes(blockedId)) {
+    if (!state.blocked_user_ids.includes(blockedId) || !state.blocked_user_ids.includes(lowercaseBlockedId)) {
       throw new Error('blocked_user_ids missing blocked user')
     }
     if (
@@ -164,8 +175,16 @@ export async function runConformanceSuite(
     }
   })
 
-  // 6. DELETE /v1/blocks/:blockedUserId unblocks user
+  // 6. DELETE /v1/blocks/:blockedUserId unblocks user (case-insensitively)
   await runStep('DELETE /v1/blocks/:blockedUserId removes block', async () => {
+    const resUpper = await fetchFn(`${baseUrl}/v1/blocks/${encodeURIComponent(uppercaseBlockedId)}`, {
+      method: 'DELETE',
+      headers: authHeaders(options.userAToken),
+    })
+    if (resUpper.status !== 200) {
+      throw new Error(`Expected 200 unblocking uppercase UUID, got ${resUpper.status}`)
+    }
+
     const res = await fetchFn(`${baseUrl}/v1/blocks/${encodeURIComponent(blockedId)}`, {
       method: 'DELETE',
       headers: authHeaders(options.userAToken),
@@ -183,7 +202,7 @@ export async function runConformanceSuite(
       headers: authHeaders(options.userAToken),
     })
     const state = (await stateRes.json()) as { blocked_user_ids: string[] }
-    if (state.blocked_user_ids.includes(blockedId)) {
+    if (state.blocked_user_ids.includes(blockedId) || state.blocked_user_ids.includes(lowercaseBlockedId)) {
       throw new Error('User still present in blocked_user_ids after DELETE')
     }
   })

@@ -10,6 +10,7 @@ import {
 import { ModKitError, errorResponse } from './errors.js'
 import {
   MODKIT_REPORT_REASONS,
+  normalizeUserId,
   type ModKitReportReason,
   type ModKitStore,
 } from './store.js'
@@ -119,7 +120,7 @@ function defaultContentExtractor(payload: DatabaseWebhookPayload): ExtractedCont
   const rawAuthorId = record.author_id ?? record.user_id
   const targetId = rawId !== undefined && rawId !== null ? String(rawId).trim() : ''
   const authorId =
-    rawAuthorId !== undefined && rawAuthorId !== null ? String(rawAuthorId).trim() : ''
+    rawAuthorId !== undefined && rawAuthorId !== null ? normalizeUserId(String(rawAuthorId)) : ''
 
   if (!targetId || !authorId) {
     throw new ModKitError(
@@ -177,9 +178,9 @@ export function createModKitServer(
   async function authenticateRequest(request: Request): Promise<ModKitAuthPrincipal> {
     for (const auth of authenticators) {
       const principal = await auth(request)
-      if (principal && principal.userId.trim().length > 0) {
+      if (principal && normalizeUserId(principal.userId).length > 0) {
         return {
-          userId: principal.userId.trim(),
+          userId: normalizeUserId(principal.userId),
           email: principal.email ?? null,
         }
       }
@@ -250,8 +251,8 @@ export function createModKitServer(
         const targetType = typeof body.target_type === 'string' ? body.target_type.trim() : ''
         const targetId = typeof body.target_id === 'string' ? body.target_id.trim() : ''
         const targetAuthorId =
-          typeof body.target_author_id === 'string' && body.target_author_id.trim().length > 0
-            ? body.target_author_id.trim()
+          typeof body.target_author_id === 'string' && normalizeUserId(body.target_author_id).length > 0
+            ? normalizeUserId(body.target_author_id)
             : null
         const reason = typeof body.reason === 'string' ? body.reason.trim() : ''
         const details =
@@ -313,7 +314,7 @@ export function createModKitServer(
         const principal = await authenticateRequest(request)
         const body = await readJsonBody(request, maxBodyBytes)
         const blockedUserId =
-          typeof body.blocked_user_id === 'string' ? body.blocked_user_id.trim() : ''
+          typeof body.blocked_user_id === 'string' ? normalizeUserId(body.blocked_user_id) : ''
         if (!blockedUserId) {
           throw new ModKitError(
             400,
@@ -346,7 +347,7 @@ export function createModKitServer(
         const rawBlockedId = path.slice('/v1/blocks/'.length)
         let blockedUserId = ''
         try {
-          blockedUserId = decodeURIComponent(rawBlockedId).trim()
+          blockedUserId = normalizeUserId(decodeURIComponent(rawBlockedId))
         } catch {
           throw new ModKitError(400, 'invalid_unblock', 'Malformed blockedUserId path parameter.')
         }
@@ -405,6 +406,7 @@ export function createModKitServer(
           )
         }
 
+        const normalizedAuthorId = normalizeUserId(extracted.authorId)
         let flagged = false
         let provider: string | null = null
         let categories: Record<string, boolean> = {}
@@ -414,7 +416,7 @@ export function createModKitServer(
           const result = await options.classifier.classify({
             targetType: extracted.targetType,
             targetId: extracted.targetId,
-            authorId: extracted.authorId,
+            authorId: normalizedAuthorId,
             text: extracted.text,
             imageUrls: extracted.imageUrls,
           })
@@ -428,7 +430,7 @@ export function createModKitServer(
         const item = await options.store.upsertItem({
           targetType: extracted.targetType,
           targetId: extracted.targetId,
-          authorId: extracted.authorId,
+          authorId: normalizedAuthorId,
           status,
           classifierProvider: provider,
           classifierCategories: categories,

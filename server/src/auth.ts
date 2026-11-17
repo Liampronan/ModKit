@@ -75,10 +75,10 @@ export function staticTokens(
     const entry = tokens[token]
     if (!entry) return null
     if (typeof entry === 'string') {
-      return { userId: entry }
+      return { userId: entry.trim().toLowerCase() }
     }
     return {
-      userId: entry.userId,
+      userId: entry.userId.trim().toLowerCase(),
       email: entry.email ?? null,
     }
   }
@@ -228,7 +228,7 @@ export function supabaseJwt(options: SupabaseJwtOptions): ModKitAuthenticator {
       return null
     }
 
-    const sub = typeof payload.sub === 'string' ? payload.sub.trim() : ''
+    const sub = typeof payload.sub === 'string' ? payload.sub.trim().toLowerCase() : ''
     if (!sub) return null
 
     const claims: JwtClaims = {

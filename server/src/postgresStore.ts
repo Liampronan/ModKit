@@ -4,6 +4,7 @@ import { ModKitError } from './errors.js'
 import {
   MODKIT_ITEM_STATUSES,
   MODKIT_REPORT_REASONS,
+  normalizeUserId,
   type AcceptTermsInput,
   type AddBanInput,
   type BlockUserInput,
@@ -142,7 +143,7 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
     },
 
     async getUserState(userId: string): Promise<ModKitUserState> {
-      const normalizedUserId = userId.trim()
+      const normalizedUserId = normalizeUserId(userId)
       if (!normalizedUserId) {
         throw new ModKitError(400, 'invalid_user_id', 'userId must be a non-empty string.')
       }
@@ -151,19 +152,19 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
         sql<{ terms_version: string }[]>`
           SELECT terms_version
           FROM modkit.terms_acceptances
-          WHERE user_id = ${normalizedUserId}
+          WHERE lower(user_id) = ${normalizedUserId}
           ORDER BY accepted_at ASC, terms_version ASC
         `,
         sql<{ blocked_id: string }[]>`
-          SELECT blocked_id
+          SELECT lower(blocked_id) AS blocked_id
           FROM modkit.blocks
-          WHERE blocker_id = ${normalizedUserId}
+          WHERE lower(blocker_id) = ${normalizedUserId}
           ORDER BY created_at ASC, blocked_id ASC
         `,
         sql<{ target_type: string; target_id: string }[]>`
           SELECT DISTINCT target_type, target_id
           FROM modkit.reports
-          WHERE reporter_id = ${normalizedUserId}
+          WHERE lower(reporter_id) = ${normalizedUserId}
           ORDER BY target_type ASC, target_id ASC
         `,
       ])
@@ -182,7 +183,7 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
     },
 
     async acceptTerms(input: AcceptTermsInput): Promise<ModKitTermsAcceptanceRecord> {
-      const userId = input.userId.trim()
+      const userId = normalizeUserId(input.userId)
       const termsVersion = input.termsVersion.trim()
       if (!userId) {
         throw new ModKitError(400, 'invalid_user_id', 'userId must be a non-empty string.')
@@ -211,8 +212,8 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
     },
 
     async blockUser(input: BlockUserInput): Promise<ModKitBlockRecord> {
-      const blockerId = input.blockerId.trim()
-      const blockedUserId = input.blockedUserId.trim()
+      const blockerId = normalizeUserId(input.blockerId)
+      const blockedUserId = normalizeUserId(input.blockedUserId)
       if (!blockerId || !blockedUserId) {
         throw new ModKitError(
           400,
@@ -244,8 +245,8 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
     },
 
     async unblockUser(input: UnblockUserInput): Promise<void> {
-      const blockerId = input.blockerId.trim()
-      const blockedUserId = input.blockedUserId.trim()
+      const blockerId = normalizeUserId(input.blockerId)
+      const blockedUserId = normalizeUserId(input.blockedUserId)
       if (!blockerId || !blockedUserId) {
         throw new ModKitError(
           400,
@@ -256,15 +257,15 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
 
       await sql`
         DELETE FROM modkit.blocks
-        WHERE blocker_id = ${blockerId} AND blocked_id = ${blockedUserId}
+        WHERE lower(blocker_id) = ${blockerId} AND lower(blocked_id) = ${blockedUserId}
       `
     },
 
     async createReport(input: CreateReportInput): Promise<ModKitReportRecord> {
-      const reporterId = input.reporterId.trim()
+      const reporterId = normalizeUserId(input.reporterId)
       const targetType = input.targetType.trim()
       const targetId = input.targetId.trim()
-      const targetAuthorId = input.targetAuthorId?.trim() || null
+      const targetAuthorId = input.targetAuthorId ? normalizeUserId(input.targetAuthorId) || null : null
       if (!reporterId || !targetType || !targetId) {
         throw new ModKitError(
           400,
@@ -391,7 +392,8 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
           FOR UPDATE
         `
         const existingItem = itemRows[0]
-        const authorId = existingItem?.author_id ?? report.target_author_id
+        const rawAuthorId = existingItem?.author_id ?? report.target_author_id
+        const authorId = rawAuthorId ? normalizeUserId(rawAuthorId) || null : null
 
         if (input.action === 'ban' && !authorId) {
           throw new ModKitError(
@@ -451,7 +453,7 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
     async upsertItem(input: UpsertItemInput): Promise<ModKitItemRecord> {
       const targetType = input.targetType.trim()
       const targetId = input.targetId.trim()
-      const authorId = input.authorId.trim()
+      const authorId = normalizeUserId(input.authorId)
       if (!targetType || !targetId || !authorId) {
         throw new ModKitError(
           400,
@@ -526,7 +528,7 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
     },
 
     async addBan(input: AddBanInput): Promise<ModKitBanRecord> {
-      const userId = input.userId.trim()
+      const userId = normalizeUserId(input.userId)
       const reason = input.reason.trim()
       if (!userId || !reason) {
         throw new ModKitError(400, 'invalid_ban', 'userId and reason must be non-empty strings.')
@@ -573,7 +575,7 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
 
     async removeBan(userId: string): Promise<boolean> {
       const rows = await sql<{ user_id: string }[]>`
-        DELETE FROM modkit.bans WHERE user_id = ${userId.trim()} RETURNING user_id
+        DELETE FROM modkit.bans WHERE lower(user_id) = ${normalizeUserId(userId)} RETURNING user_id
       `
       return rows.length > 0
     },
@@ -583,7 +585,7 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
       const rows = await sql<{ banned: boolean }[]>`
         SELECT EXISTS (
           SELECT 1 FROM modkit.bans b
-          WHERE b.user_id = ${userId.trim()}
+          WHERE lower(b.user_id) = ${normalizeUserId(userId)}
             AND (b.expires_at IS NULL OR b.expires_at > ${checkIso}::timestamptz)
         ) AS banned
       `
@@ -616,7 +618,7 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
     async deleteUserData(input: string | DeleteUserDataInput): Promise<ModKitDeleteUserDataResult> {
       const rawUserId = typeof input === 'string' ? input : input.userId
       const deleteBan = typeof input === 'string' ? false : Boolean(input.deleteBan)
-      const userId = rawUserId.trim()
+      const userId = normalizeUserId(rawUserId)
       if (!userId) {
         throw new ModKitError(400, 'invalid_user_id', 'userId must be a non-empty string.')
       }
@@ -625,29 +627,29 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
         const q = tx as unknown as Sql
         const deletedTerms = await q<{ user_id: string }[]>`
           DELETE FROM modkit.terms_acceptances
-          WHERE user_id = ${userId}
+          WHERE lower(user_id) = ${userId}
           RETURNING user_id
         `
         const deletedBlocks = await q<{ blocker_id: string }[]>`
           DELETE FROM modkit.blocks
-          WHERE blocker_id = ${userId} OR blocked_id = ${userId}
+          WHERE lower(blocker_id) = ${userId} OR lower(blocked_id) = ${userId}
           RETURNING blocker_id
         `
         const deletedReports = await q<{ id: string }[]>`
           DELETE FROM modkit.reports
-          WHERE reporter_id = ${userId}
+          WHERE lower(reporter_id) = ${userId}
           RETURNING id
         `
         const deletedItems = await q<{ target_id: string }[]>`
           DELETE FROM modkit.items
-          WHERE author_id = ${userId}
+          WHERE lower(author_id) = ${userId}
           RETURNING target_id
         `
         let bansDeleted = 0
         if (deleteBan) {
           const deletedBans = await q<{ user_id: string }[]>`
             DELETE FROM modkit.bans
-            WHERE user_id = ${userId}
+            WHERE lower(user_id) = ${userId}
             RETURNING user_id
           `
           bansDeleted = deletedBans.length

@@ -1,5 +1,25 @@
 import Foundation
 
+public enum ModKitIdentifier {
+    /// Lowercases strings that parse as UUIDs while trimming surrounding whitespace.
+    public static func normalizeUUIDIfApplicable(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let uuid = UUID(uuidString: trimmed) {
+            return uuid.uuidString.lowercased()
+        }
+        return trimmed
+    }
+
+    /// Trims whitespace and lowercases user IDs (including uppercase `UUID().uuidString` values).
+    public static func normalizeUserId(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let uuid = UUID(uuidString: trimmed) {
+            return uuid.uuidString.lowercased()
+        }
+        return trimmed.lowercased()
+    }
+}
+
 public enum ModKitReportReason: String, CaseIterable, Codable, Sendable, Identifiable {
     case objectionable
     case spam
@@ -83,9 +103,14 @@ public struct ModKitReportInput: Codable, Equatable, Sendable {
         reason: ModKitReportReason,
         details: String? = nil
     ) {
-        self.targetType = targetType
-        self.targetId = targetId
-        self.targetAuthorId = targetAuthorId
+        self.targetType = targetType.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.targetId = ModKitIdentifier.normalizeUUIDIfApplicable(targetId)
+        if let targetAuthorId,
+           !targetAuthorId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.targetAuthorId = ModKitIdentifier.normalizeUUIDIfApplicable(targetAuthorId).lowercased()
+        } else {
+            self.targetAuthorId = nil
+        }
         self.reason = reason
         self.details = details
     }

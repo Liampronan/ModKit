@@ -113,7 +113,14 @@ public struct ModKitClient: Sendable {
                 )
             },
             submitReport: { input in
-                let payload = try JSONEncoder().encode(input)
+                let normalizedInput = ModKitReportInput(
+                    targetType: input.targetType,
+                    targetId: input.targetId,
+                    targetAuthorId: input.targetAuthorId,
+                    reason: input.reason,
+                    details: input.details
+                )
+                let payload = try JSONEncoder().encode(normalizedInput)
                 _ = try await makeRequest(
                     method: "POST",
                     path: "/v1/reports",
@@ -121,7 +128,8 @@ public struct ModKitClient: Sendable {
                 )
             },
             blockUser: { userId in
-                let payload = try JSONEncoder().encode(["blocked_user_id": userId])
+                let normalizedUserId = ModKitIdentifier.normalizeUserId(userId)
+                let payload = try JSONEncoder().encode(["blocked_user_id": normalizedUserId])
                 _ = try await makeRequest(
                     method: "POST",
                     path: "/v1/blocks",
@@ -129,9 +137,10 @@ public struct ModKitClient: Sendable {
                 )
             },
             unblockUser: { userId in
+                let normalizedUserId = ModKitIdentifier.normalizeUserId(userId)
                 var allowed = CharacterSet.urlPathAllowed
                 allowed.remove(charactersIn: "/")
-                let encoded = userId.addingPercentEncoding(withAllowedCharacters: allowed) ?? userId
+                let encoded = normalizedUserId.addingPercentEncoding(withAllowedCharacters: allowed) ?? normalizedUserId
                 _ = try await makeRequest(
                     method: "DELETE",
                     path: "/v1/blocks/\(encoded)"
