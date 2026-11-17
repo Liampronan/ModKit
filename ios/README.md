@@ -4,10 +4,10 @@ Zero-dependency Swift 6 / SwiftUI package (`iOS 18+`, `macOS 15+`) providing cli
 
 ## Installation
 
-Add `https://github.com/Liampronan/ModKit` (version `1.0.0-beta.1`) in Xcode (**File → Add Package Dependencies…**) or in your `Package.swift`:
+Add `https://github.com/Liampronan/ModKit` (version `1.0.0-beta.2`) in Xcode (**File → Add Package Dependencies…**) or in your `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/Liampronan/ModKit.git", from: "1.0.0-beta.1")
+.package(url: "https://github.com/Liampronan/ModKit.git", from: "1.0.0-beta.2")
 ```
 
 ## Core Types

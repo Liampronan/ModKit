@@ -5,7 +5,7 @@ import {
   slackNotifier,
   supabaseJwt,
   supabaseStorage,
-} from 'npm:modkit-server@1.0.0-beta.1'
+} from 'npm:modkit-server@1.0.0-beta.2'
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const store = postgresStore({
