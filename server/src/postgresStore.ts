@@ -8,6 +8,7 @@ import {
   type AcceptTermsInput,
   type AddBanInput,
   type BlockUserInput,
+  type CheckRateLimitInput,
   type CreateReportInput,
   type DeleteUserDataInput,
   type ListReportsFilter,
@@ -17,6 +18,7 @@ import {
   type ModKitHiddenItem,
   type ModKitItemRecord,
   type ModKitItemStatus,
+  type ModKitRateLimitResult,
   type ModKitReportReason,
   type ModKitReportRecord,
   type ModKitReportStatus,
@@ -287,7 +289,7 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
         typeof input.details === 'string' && input.details.trim().length > 0
           ? input.details.trim()
           : null
-      const autoFlag = input.autoFlagItem ?? true
+      const autoFlag = input.autoFlagItem ?? false
 
       const rows = await sql.begin(async (tx) => {
         const q = tx as unknown as Sql
@@ -645,6 +647,10 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
           WHERE lower(author_id) = ${userId}
           RETURNING target_id
         `
+        await q`
+          DELETE FROM modkit.rate_limits
+          WHERE lower(user_id) = ${userId}
+        `.catch(() => {})
         let bansDeleted = 0
         if (deleteBan) {
           const deletedBans = await q<{ user_id: string }[]>`
@@ -664,6 +670,80 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
           bans_deleted: bansDeleted,
         }
       })
+    },
+
+    async checkRateLimit(input: CheckRateLimitInput): Promise<ModKitRateLimitResult> {
+      const userId = normalizeUserId(input.userId)
+      const action = input.action.trim()
+      if (!userId || !action) {
+        throw new ModKitError(400, 'invalid_rate_limit', 'userId and action must be non-empty strings.')
+      }
+      const maxRequests = Math.max(1, Math.floor(input.maxRequests))
+      const windowSeconds = Math.max(1, Math.floor(input.windowSeconds))
+      const nowIso = (input.now ?? new Date()).toISOString()
+
+      async function runUpsert(): Promise<{ request_count: number; retry_after_seconds: number }[]> {
+        return await sql<{ request_count: number; retry_after_seconds: number }[]>`
+          INSERT INTO modkit.rate_limits (user_id, action, window_start, request_count)
+          VALUES (${userId}, ${action}, ${nowIso}::timestamptz, 1)
+          ON CONFLICT (user_id, action) DO UPDATE SET
+            request_count = CASE
+              WHEN modkit.rate_limits.window_start + (${windowSeconds} * interval '1 second') <= ${nowIso}::timestamptz
+                THEN 1
+              ELSE modkit.rate_limits.request_count + 1
+            END,
+            window_start = CASE
+              WHEN modkit.rate_limits.window_start + (${windowSeconds} * interval '1 second') <= ${nowIso}::timestamptz
+                THEN ${nowIso}::timestamptz
+              ELSE modkit.rate_limits.window_start
+            END
+          RETURNING
+            request_count::int AS request_count,
+            GREATEST(
+              1,
+              CEIL(
+                EXTRACT(
+                  EPOCH FROM (
+                    window_start + (${windowSeconds} * interval '1 second') - ${nowIso}::timestamptz
+                  )
+                )
+              )
+            )::int AS retry_after_seconds
+        `
+      }
+
+      let rows: { request_count: number; retry_after_seconds: number }[]
+      try {
+        rows = await runUpsert()
+      } catch (err) {
+        if ((err as { code?: string })?.code === '42P01') {
+          await sql`
+            CREATE TABLE IF NOT EXISTS modkit.rate_limits (
+              user_id text NOT NULL,
+              action text NOT NULL,
+              window_start timestamptz NOT NULL DEFAULT now(),
+              request_count integer NOT NULL DEFAULT 1,
+              PRIMARY KEY (user_id, action)
+            )
+          `
+          await sql`ALTER TABLE modkit.rate_limits ENABLE ROW LEVEL SECURITY`
+          rows = await runUpsert()
+        } else {
+          throw err
+        }
+      }
+
+      const count = Number(rows[0]?.request_count ?? 1)
+      const retryAfterSeconds = Number(rows[0]?.retry_after_seconds ?? windowSeconds)
+      const allowed = count <= maxRequests
+      const remaining = Math.max(0, maxRequests - count)
+
+      return {
+        allowed,
+        count,
+        remaining,
+        retryAfterSeconds: allowed ? 0 : retryAfterSeconds,
+      }
     },
   }
 }

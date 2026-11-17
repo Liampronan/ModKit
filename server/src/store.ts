@@ -175,6 +175,23 @@ export interface ModKitDeleteUserDataResult {
   bans_deleted: number
 }
 
+export type ModKitRateLimitAction = 'reports' | 'blocks' | (string & {})
+
+export interface CheckRateLimitInput {
+  userId: string
+  action: ModKitRateLimitAction
+  maxRequests: number
+  windowSeconds: number
+  now?: Date | undefined
+}
+
+export interface ModKitRateLimitResult {
+  allowed: boolean
+  count: number
+  remaining: number
+  retryAfterSeconds: number
+}
+
 export interface ModKitStore {
   getUserState(userId: string): Promise<ModKitUserState>
   acceptTerms(input: AcceptTermsInput): Promise<ModKitTermsAcceptanceRecord>
@@ -191,4 +208,5 @@ export interface ModKitStore {
   isBanned(userId: string, now?: Date): Promise<boolean>
   listBans(): Promise<ModKitBanRecord[]>
   deleteUserData(input: string | DeleteUserDataInput): Promise<ModKitDeleteUserDataResult>
+  checkRateLimit?(input: CheckRateLimitInput): Promise<ModKitRateLimitResult>
 }

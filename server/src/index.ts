@@ -7,6 +7,7 @@ export {
   type AcceptTermsInput,
   type AddBanInput,
   type BlockUserInput,
+  type CheckRateLimitInput,
   type CreateReportInput,
   type DeleteUserDataInput,
   type ListReportsFilter,
@@ -16,6 +17,8 @@ export {
   type ModKitHiddenItem,
   type ModKitItemRecord,
   type ModKitItemStatus,
+  type ModKitRateLimitAction,
+  type ModKitRateLimitResult,
   type ModKitReportReason,
   type ModKitReportRecord,
   type ModKitReportStatus,
@@ -72,7 +75,10 @@ export {
   type DatabaseWebhookPayload,
   type ExtractedContentItem,
   type ModKitContentExtractor,
+  type ModKitContentResolver,
+  type ModKitRateLimitConfig,
   type ModKitServerOptions,
+  type ResolvedContentItem,
 } from './server.js'
 export {
   runConformanceSuite,

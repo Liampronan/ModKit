@@ -266,3 +266,129 @@ test('POST /v1/webhooks/content extracts storage images, classifies flagged cont
   assert.equal(storedItem?.status, 'rejected')
   assert.deepEqual(storedItem?.classifier_categories, { sexual: true })
 })
+
+test('POST /v1/reports resolves author server-side, ignores client target_author_id, defaults autoHideOnReport to false, and rate-limits reports and blocks (#12)', async () => {
+  const store = memoryStore()
+  const knownAuthors = new Map<string, string>([
+    ['trash_pickup:pickup-real-1', 'REAL-AUTHOR-UUID-0001'],
+    ['trash_pickup:pickup-real-2', 'REAL-AUTHOR-UUID-0002'],
+    ['trash_pickup:pickup-real-3', 'REAL-AUTHOR-UUID-0003'],
+  ])
+
+  const handler = createModKitServer({
+    store,
+    authenticate: staticTokens({
+      'token-reporter': 'reporter-user-1',
+      'token-reporter-2': 'reporter-user-2',
+    }),
+    resolveContent: async (targetType, targetId) => {
+      const authorId = knownAuthors.get(`${targetType}:${targetId}`)
+      return authorId ? { authorId } : null
+    },
+    rateLimit: {
+      reportsPerWindow: 2,
+      blocksPerWindow: 2,
+      windowSeconds: 60,
+    },
+  })
+
+  // 1. Unknown content returns 404
+  const notFoundRes = await handler(
+    new Request('https://example.supabase.co/v1/reports', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer token-reporter-2',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        target_type: 'trash_pickup',
+        target_id: 'non-existent-pickup',
+        target_author_id: 'innocent-victim-id',
+        reason: 'spam',
+      }),
+    }),
+  )
+  assert.equal(notFoundRes.status, 404)
+
+  // 2. Spoofed target_author_id from client is ignored; resolved server-side author is stored, and item is NOT globally flagged
+  const repRes1 = await handler(
+    new Request('https://example.supabase.co/v1/reports', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer token-reporter',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        target_type: 'trash_pickup',
+        target_id: 'pickup-real-1',
+        target_author_id: 'spoofed-innocent-user',
+        reason: 'objectionable',
+      }),
+    }),
+  )
+  assert.equal(repRes1.status, 201)
+  const repJson1 = (await repRes1.json()) as { id: string }
+  const storedReport = await store.getReportById(repJson1.id)
+  assert.equal(storedReport?.target_author_id, 'real-author-uuid-0001')
+  assert.equal(await store.getItem('trash_pickup', 'pickup-real-1'), null)
+
+  // 3. Second report succeeds, third report exceeds rate limit (429)
+  const repRes2 = await handler(
+    new Request('https://example.supabase.co/v1/reports', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer token-reporter',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        target_type: 'trash_pickup',
+        target_id: 'pickup-real-2',
+        reason: 'spam',
+      }),
+    }),
+  )
+  assert.equal(repRes2.status, 201)
+
+  const repRes3 = await handler(
+    new Request('https://example.supabase.co/v1/reports', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer token-reporter',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        target_type: 'trash_pickup',
+        target_id: 'pickup-real-3',
+        reason: 'spam',
+      }),
+    }),
+  )
+  assert.equal(repRes3.status, 429)
+
+  // 4. Blocks rate limit: 2 allowed, 3rd returns 429
+  for (const blocked of ['user-b-1', 'user-b-2']) {
+    const bRes = await handler(
+      new Request('https://example.supabase.co/v1/blocks', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer token-reporter',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ blocked_user_id: blocked }),
+      }),
+    )
+    assert.equal(bRes.status, 200)
+  }
+
+  const blockRateLimited = await handler(
+    new Request('https://example.supabase.co/v1/blocks', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer token-reporter',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ blocked_user_id: 'user-b-3' }),
+    }),
+  )
+  assert.equal(blockRateLimited.status, 429)
+})
