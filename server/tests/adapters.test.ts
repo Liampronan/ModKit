@@ -162,6 +162,51 @@ async function runStoreContractTests(store: ModKitStore): Promise<void> {
   assert.equal(classifiedItem.classifier_provider, 'openai')
   assert.deepEqual(classifiedItem.classifier_categories, { sexual: true, violence: false })
   assert.deepEqual(classifiedItem.classifier_scores, { sexual: 0.98, violence: 0.01 })
+
+  // Account deletion purges terms_acceptances, blocks (both directions), filed reports, and authored items while keeping bans by default
+  const userD = '44444444-4444-4444-4444-444444444444'
+  await store.acceptTerms({ userId: userD, termsVersion: '2026-11-01', now: t2 })
+  await store.blockUser({ blockerId: userD, blockedUserId: userA, now: t2 })
+  await store.blockUser({ blockerId: userB, blockedUserId: userD, now: t2 })
+  await store.createReport({
+    reporterId: userD,
+    targetType: 'trash_pickup',
+    targetId: 'pickup-404',
+    targetAuthorId: userA,
+    reason: 'spam',
+    now: t2,
+  })
+  await store.upsertItem({
+    targetType: 'trash_pickup',
+    targetId: 'pickup-d-1',
+    authorId: userD,
+    status: 'approved',
+    now: t2,
+  })
+  await store.addBan({ userId: userD, reason: 'Abuse before deletion', now: t2 })
+
+  const deletedSummary = await store.deleteUserData(userD)
+  assert.deepEqual(deletedSummary, {
+    user_id: userD,
+    terms_deleted: 1,
+    blocks_deleted: 2,
+    reports_deleted: 1,
+    items_deleted: 1,
+    bans_deleted: 0,
+  })
+  assert.deepEqual(await store.getUserState(userD), {
+    user_id: userD,
+    accepted_terms_versions: [],
+    blocked_user_ids: [],
+    hidden_items: [],
+  })
+  assert.equal((await store.getUserState(userB)).blocked_user_ids.includes(userD), false)
+  assert.equal(await store.getItem('trash_pickup', 'pickup-d-1'), null)
+  assert.equal(await store.isBanned(userD, t2), true)
+
+  const deletedWithBan = await store.deleteUserData({ userId: userD, deleteBan: true })
+  assert.equal(deletedWithBan.bans_deleted, 1)
+  assert.equal(await store.isBanned(userD, t2), false)
 }
 
 test('memoryStore satisfies ModKitStore contract', async () => {
@@ -597,6 +642,35 @@ test('postgresStore satisfies ModKitStore contract and RLS visibility helpers ag
       `
       assert.equal(visRows[0]?.visible_reporter, false)
       assert.equal(visRows[0]?.visible_other, true)
+
+      // Verify SQL modkit.delete_user_data SECURITY DEFINER function
+      const sqlDelUser = '55555555-5555-5555-5555-555555555555'
+      await store.acceptTerms({ userId: sqlDelUser, termsVersion: '2026-11-01' })
+      await store.blockUser({ blockerId: sqlDelUser, blockedUserId: '11111111-1111-1111-1111-111111111111' })
+      await store.upsertItem({
+        targetType: 'trash_pickup',
+        targetId: 'pickup-sql-del',
+        authorId: sqlDelUser,
+        status: 'approved',
+      })
+      await store.addBan({ userId: sqlDelUser, reason: 'Keep ban on SQL delete' })
+
+      const delFnRows = await store.sql<{ result: Record<string, number | string> }[]>`
+        SELECT modkit.delete_user_data(${sqlDelUser}) AS result
+      `
+      const fnRes =
+        typeof delFnRows[0]?.result === 'string'
+          ? (JSON.parse(delFnRows[0].result) as Record<string, number | string>)
+          : delFnRows[0]?.result
+      assert.deepEqual(fnRes, {
+        user_id: sqlDelUser,
+        terms_deleted: 1,
+        blocks_deleted: 1,
+        reports_deleted: 0,
+        items_deleted: 1,
+        bans_deleted: 0,
+      })
+      assert.equal(await store.isBanned(sqlDelUser), true)
     } finally {
       await store.close()
     }

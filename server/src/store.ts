@@ -152,6 +152,20 @@ export interface AddBanInput {
   now?: Date | undefined
 }
 
+export interface DeleteUserDataInput {
+  userId: string
+  deleteBan?: boolean | undefined
+}
+
+export interface ModKitDeleteUserDataResult {
+  user_id: string
+  terms_deleted: number
+  blocks_deleted: number
+  reports_deleted: number
+  items_deleted: number
+  bans_deleted: number
+}
+
 export interface ModKitStore {
   getUserState(userId: string): Promise<ModKitUserState>
   acceptTerms(input: AcceptTermsInput): Promise<ModKitTermsAcceptanceRecord>
@@ -167,4 +181,5 @@ export interface ModKitStore {
   removeBan(userId: string): Promise<boolean>
   isBanned(userId: string, now?: Date): Promise<boolean>
   listBans(): Promise<ModKitBanRecord[]>
+  deleteUserData(input: string | DeleteUserDataInput): Promise<ModKitDeleteUserDataResult>
 }

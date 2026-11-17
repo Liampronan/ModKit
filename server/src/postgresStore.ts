@@ -8,9 +8,11 @@ import {
   type AddBanInput,
   type BlockUserInput,
   type CreateReportInput,
+  type DeleteUserDataInput,
   type ListReportsFilter,
   type ModKitBanRecord,
   type ModKitBlockRecord,
+  type ModKitDeleteUserDataResult,
   type ModKitHiddenItem,
   type ModKitItemRecord,
   type ModKitItemStatus,
@@ -609,6 +611,57 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
         created_at: toIsoString(row.created_at),
         expires_at: row.expires_at ? toIsoString(row.expires_at) : null,
       }))
+    },
+
+    async deleteUserData(input: string | DeleteUserDataInput): Promise<ModKitDeleteUserDataResult> {
+      const rawUserId = typeof input === 'string' ? input : input.userId
+      const deleteBan = typeof input === 'string' ? false : Boolean(input.deleteBan)
+      const userId = rawUserId.trim()
+      if (!userId) {
+        throw new ModKitError(400, 'invalid_user_id', 'userId must be a non-empty string.')
+      }
+
+      return await sql.begin(async (tx) => {
+        const q = tx as unknown as Sql
+        const deletedTerms = await q<{ user_id: string }[]>`
+          DELETE FROM modkit.terms_acceptances
+          WHERE user_id = ${userId}
+          RETURNING user_id
+        `
+        const deletedBlocks = await q<{ blocker_id: string }[]>`
+          DELETE FROM modkit.blocks
+          WHERE blocker_id = ${userId} OR blocked_id = ${userId}
+          RETURNING blocker_id
+        `
+        const deletedReports = await q<{ id: string }[]>`
+          DELETE FROM modkit.reports
+          WHERE reporter_id = ${userId}
+          RETURNING id
+        `
+        const deletedItems = await q<{ target_id: string }[]>`
+          DELETE FROM modkit.items
+          WHERE author_id = ${userId}
+          RETURNING target_id
+        `
+        let bansDeleted = 0
+        if (deleteBan) {
+          const deletedBans = await q<{ user_id: string }[]>`
+            DELETE FROM modkit.bans
+            WHERE user_id = ${userId}
+            RETURNING user_id
+          `
+          bansDeleted = deletedBans.length
+        }
+
+        return {
+          user_id: userId,
+          terms_deleted: deletedTerms.length,
+          blocks_deleted: deletedBlocks.length,
+          reports_deleted: deletedReports.length,
+          items_deleted: deletedItems.length,
+          bans_deleted: bansDeleted,
+        }
+      })
     },
   }
 }

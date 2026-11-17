@@ -166,3 +166,68 @@ GRANT EXECUTE ON FUNCTION modkit.is_banned(text) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION modkit.is_blocked(text, text) TO PUBLIC;
 GRANT EXECUTE ON FUNCTION modkit.is_visible(text, text, text, text, text) TO PUBLIC;
 
+-- Account deletion helper for App Store Review Guideline 5.1.1(v).
+-- Deletes a user's terms_acceptances, blocks (both directions), filed reports, and authored items.
+-- Keeps `modkit.bans` by default (p_delete_ban = false) so banned accounts retain their ban audit trail.
+CREATE OR REPLACE FUNCTION modkit.delete_user_data(
+  p_user_id text,
+  p_delete_ban boolean DEFAULT false
+)
+RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = modkit, public AS $$
+DECLARE
+  v_user_id text := btrim(COALESCE(p_user_id, ''));
+  v_terms integer := 0;
+  v_blocks integer := 0;
+  v_reports integer := 0;
+  v_items integer := 0;
+  v_bans integer := 0;
+BEGIN
+  IF v_user_id = '' THEN
+    RAISE EXCEPTION 'user_id must be a non-empty string'
+      USING ERRCODE = '22023';
+  END IF;
+
+  DELETE FROM modkit.terms_acceptances
+  WHERE user_id = v_user_id;
+  GET DIAGNOSTICS v_terms = ROW_COUNT;
+
+  DELETE FROM modkit.blocks
+  WHERE blocker_id = v_user_id OR blocked_id = v_user_id;
+  GET DIAGNOSTICS v_blocks = ROW_COUNT;
+
+  DELETE FROM modkit.reports
+  WHERE reporter_id = v_user_id;
+  GET DIAGNOSTICS v_reports = ROW_COUNT;
+
+  DELETE FROM modkit.items
+  WHERE author_id = v_user_id;
+  GET DIAGNOSTICS v_items = ROW_COUNT;
+
+  IF COALESCE(p_delete_ban, false) THEN
+    DELETE FROM modkit.bans
+    WHERE user_id = v_user_id;
+    GET DIAGNOSTICS v_bans = ROW_COUNT;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'user_id', v_user_id,
+    'terms_deleted', v_terms,
+    'blocks_deleted', v_blocks,
+    'reports_deleted', v_reports,
+    'items_deleted', v_items,
+    'bans_deleted', v_bans
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION modkit.delete_user_data(text, boolean) FROM PUBLIC;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    GRANT EXECUTE ON FUNCTION modkit.delete_user_data(text, boolean) TO service_role;
+  END IF;
+END;
+$$;
+
+
