@@ -643,6 +643,31 @@ test('postgresStore satisfies ModKitStore contract and RLS visibility helpers ag
       assert.equal(visRows[0]?.visible_reporter, false)
       assert.equal(visRows[0]?.visible_other, true)
 
+      // Conformance check for UUID case normalization (#13):
+      // Block with an uppercase UUID, then check modkit.is_blocked and modkit.is_visible with lowercase UUIDs
+      const upperBlocker = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'
+      const upperBlocked = '12345678-ABCD-EF01-2345-6789ABCDEF01'
+      const blockRec = await store.blockUser({
+        blockerId: upperBlocker,
+        blockedUserId: upperBlocked,
+      })
+      assert.equal(blockRec.blocker_id, upperBlocker.toLowerCase())
+      assert.equal(blockRec.blocked_user_id, upperBlocked.toLowerCase())
+
+      const caseRows = await store.sql<{
+        is_blocked_lower: boolean
+        is_blocked_upper: boolean
+        is_visible_lower: boolean
+      }[]>`
+        SELECT
+          modkit.is_blocked(${upperBlocker.toLowerCase()}, ${upperBlocked.toLowerCase()}) AS is_blocked_lower,
+          modkit.is_blocked(${upperBlocker}, ${upperBlocked}) AS is_blocked_upper,
+          modkit.is_visible(${upperBlocker.toLowerCase()}, ${upperBlocked.toLowerCase()}, 'trash_pickup', 'pickup-case-1', 'post') AS is_visible_lower
+      `
+      assert.equal(caseRows[0]?.is_blocked_lower, true)
+      assert.equal(caseRows[0]?.is_blocked_upper, true)
+      assert.equal(caseRows[0]?.is_visible_lower, false)
+
       // Verify SQL modkit.delete_user_data SECURITY DEFINER function
       const sqlDelUser = '55555555-5555-5555-5555-555555555555'
       await store.acceptTerms({ userId: sqlDelUser, termsVersion: '2026-11-01' })

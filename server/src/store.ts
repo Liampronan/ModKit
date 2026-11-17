@@ -30,6 +30,15 @@ export const MODKIT_ITEM_STATUSES: ReadonlyArray<ModKitItemStatus> = [
 
 export type ModKitResolutionAction = 'remove' | 'dismiss' | 'ban'
 
+/**
+ * Normalizes a user ID by trimming whitespace and lowercasing so UUID case differences
+ * (e.g. Swift `UUID().uuidString` uppercase vs Supabase `auth.uid()::text` lowercase)
+ * never cause silent mismatches in blocks, bans, or reports.
+ */
+export function normalizeUserId(userId: string): string {
+  return userId.trim().toLowerCase()
+}
+
 export interface ModKitHiddenItem {
   target_type: string
   target_id: string

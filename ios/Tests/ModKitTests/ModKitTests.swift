@@ -207,14 +207,14 @@ final class ModKitTests: XCTestCase {
         try await client.submitReport(
             ModKitReportInput(
                 targetType: "trash_pickup",
-                targetId: "df039bb9-4651-4cfa-9039-5667513802b6",
-                targetAuthorId: "99999999-0000-0000-0000-000000000002",
+                targetId: "DF039BB9-4651-4CFA-9039-5667513802B6",
+                targetAuthorId: "99999999-0000-0000-0000-ABCDEFABCDEF",
                 reason: .objectionable,
                 details: "Inappropriate photo"
             )
         )
-        try await client.blockUser("99999999-0000-0000-0000-000000000002")
-        try await client.unblockUser("99999999-0000-0000-0000-000000000002")
+        try await client.blockUser("99999999-0000-0000-0000-ABCDEFABCDEF")
+        try await client.unblockUser("99999999-0000-0000-0000-ABCDEFABCDEF")
 
         let calls = recordedRequests.withLock { $0 }
         XCTAssertEqual(calls.count, 5)
@@ -227,12 +227,15 @@ final class ModKitTests: XCTestCase {
 
         XCTAssertEqual(calls[2].method, "POST")
         XCTAssertEqual(calls[2].path, "/functions/v1/modkit/v1/reports")
+        XCTAssertTrue(calls[2].body?.contains("df039bb9-4651-4cfa-9039-5667513802b6") == true)
+        XCTAssertTrue(calls[2].body?.contains("99999999-0000-0000-0000-abcdefabcdef") == true)
 
         XCTAssertEqual(calls[3].method, "POST")
         XCTAssertEqual(calls[3].path, "/functions/v1/modkit/v1/blocks")
+        XCTAssertTrue(calls[3].body?.contains("99999999-0000-0000-0000-abcdefabcdef") == true)
 
         XCTAssertEqual(calls[4].method, "DELETE")
-        XCTAssertEqual(calls[4].path, "/functions/v1/modkit/v1/blocks/99999999-0000-0000-0000-000000000002")
+        XCTAssertEqual(calls[4].path, "/functions/v1/modkit/v1/blocks/99999999-0000-0000-0000-abcdefabcdef")
     }
 
     @MainActor

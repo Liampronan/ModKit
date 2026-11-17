@@ -3,6 +3,7 @@ import { ModKitError } from './errors.js'
 import {
   MODKIT_ITEM_STATUSES,
   MODKIT_REPORT_REASONS,
+  normalizeUserId,
   type AcceptTermsInput,
   type AddBanInput,
   type BlockUserInput,
@@ -39,7 +40,7 @@ export function memoryStore(): ModKitStore {
 
   return {
     async getUserState(userId: string): Promise<ModKitUserState> {
-      const normalizedUserId = userId.trim()
+      const normalizedUserId = normalizeUserId(userId)
       if (!normalizedUserId) {
         throw new ModKitError(400, 'invalid_user_id', 'userId must be a non-empty string.')
       }
@@ -76,7 +77,7 @@ export function memoryStore(): ModKitStore {
     },
 
     async acceptTerms(input: AcceptTermsInput): Promise<ModKitTermsAcceptanceRecord> {
-      const userId = input.userId.trim()
+      const userId = normalizeUserId(input.userId)
       const termsVersion = input.termsVersion.trim()
       if (!userId) {
         throw new ModKitError(400, 'invalid_user_id', 'userId must be a non-empty string.')
@@ -106,8 +107,8 @@ export function memoryStore(): ModKitStore {
     },
 
     async blockUser(input: BlockUserInput): Promise<ModKitBlockRecord> {
-      const blockerId = input.blockerId.trim()
-      const blockedUserId = input.blockedUserId.trim()
+      const blockerId = normalizeUserId(input.blockerId)
+      const blockedUserId = normalizeUserId(input.blockedUserId)
       if (!blockerId || !blockedUserId) {
         throw new ModKitError(400, 'invalid_block', 'blockerId and blockedUserId must be non-empty strings.')
       }
@@ -136,8 +137,8 @@ export function memoryStore(): ModKitStore {
     },
 
     async unblockUser(input: UnblockUserInput): Promise<void> {
-      const blockerId = input.blockerId.trim()
-      const blockedUserId = input.blockedUserId.trim()
+      const blockerId = normalizeUserId(input.blockerId)
+      const blockedUserId = normalizeUserId(input.blockedUserId)
       if (!blockerId || !blockedUserId) {
         throw new ModKitError(400, 'invalid_unblock', 'blockerId and blockedUserId must be non-empty strings.')
       }
@@ -145,10 +146,10 @@ export function memoryStore(): ModKitStore {
     },
 
     async createReport(input: CreateReportInput): Promise<ModKitReportRecord> {
-      const reporterId = input.reporterId.trim()
+      const reporterId = normalizeUserId(input.reporterId)
       const targetType = input.targetType.trim()
       const targetId = input.targetId.trim()
-      const targetAuthorId = input.targetAuthorId?.trim() || null
+      const targetAuthorId = input.targetAuthorId ? normalizeUserId(input.targetAuthorId) || null : null
       if (!reporterId || !targetType || !targetId) {
         throw new ModKitError(
           400,
@@ -262,7 +263,8 @@ export function memoryStore(): ModKitStore {
 
       const key = itemKey(report.target_type, report.target_id)
       const existingItem = itemsByKey.get(key)
-      const authorId = existingItem?.author_id ?? report.target_author_id ?? 'unknown'
+      const rawAuthorId = existingItem?.author_id ?? report.target_author_id
+      const authorId = rawAuthorId ? normalizeUserId(rawAuthorId) || 'unknown' : 'unknown'
 
       if (input.action === 'remove' || input.action === 'ban') {
         itemsByKey.set(key, {
@@ -285,7 +287,8 @@ export function memoryStore(): ModKitStore {
       }
 
       if (input.action === 'ban') {
-        const targetUser = report.target_author_id ?? existingItem?.author_id
+        const rawTargetUser = report.target_author_id ?? existingItem?.author_id
+        const targetUser = rawTargetUser ? normalizeUserId(rawTargetUser) : ''
         if (!targetUser) {
           throw new ModKitError(
             400,
@@ -308,7 +311,7 @@ export function memoryStore(): ModKitStore {
     async upsertItem(input: UpsertItemInput): Promise<ModKitItemRecord> {
       const targetType = input.targetType.trim()
       const targetId = input.targetId.trim()
-      const authorId = input.authorId.trim()
+      const authorId = normalizeUserId(input.authorId)
       if (!targetType || !targetId || !authorId) {
         throw new ModKitError(
           400,
@@ -364,7 +367,7 @@ export function memoryStore(): ModKitStore {
     },
 
     async addBan(input: AddBanInput): Promise<ModKitBanRecord> {
-      const userId = input.userId.trim()
+      const userId = normalizeUserId(input.userId)
       const reason = input.reason.trim()
       if (!userId || !reason) {
         throw new ModKitError(400, 'invalid_ban', 'userId and reason must be non-empty strings.')
@@ -390,11 +393,11 @@ export function memoryStore(): ModKitStore {
     },
 
     async removeBan(userId: string): Promise<boolean> {
-      return bansByUser.delete(userId.trim())
+      return bansByUser.delete(normalizeUserId(userId))
     },
 
     async isBanned(userId: string, now?: Date): Promise<boolean> {
-      const record = bansByUser.get(userId.trim())
+      const record = bansByUser.get(normalizeUserId(userId))
       if (!record) return false
       if (!record.expires_at) return true
       const checkTime = (now ?? new Date()).getTime()
@@ -410,7 +413,7 @@ export function memoryStore(): ModKitStore {
     async deleteUserData(input: string | DeleteUserDataInput): Promise<ModKitDeleteUserDataResult> {
       const rawUserId = typeof input === 'string' ? input : input.userId
       const deleteBan = typeof input === 'string' ? false : Boolean(input.deleteBan)
-      const userId = rawUserId.trim()
+      const userId = normalizeUserId(rawUserId)
       if (!userId) {
         throw new ModKitError(400, 'invalid_user_id', 'userId must be a non-empty string.')
       }

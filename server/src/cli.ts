@@ -7,6 +7,7 @@ import { runConformanceSuite } from './conformance.js'
 import { postgresStore } from './postgresStore.js'
 import {
   MODKIT_REPORT_STATUSES,
+  normalizeUserId,
   type ModKitReportStatus,
   type ModKitResolutionAction,
   type ModKitStore,
@@ -172,7 +173,7 @@ export async function runCli(argv: string[], io: CliIo = {}): Promise<number> {
     if (group === 'bans') {
       if (subcommand === 'add') {
         const { positional, flags } = parseFlags(rest)
-        const userId = positional[0]
+        const userId = positional[0] ? normalizeUserId(positional[0]) : ''
         const reason = flags.get('reason')
         const bannedBy = flags.get('by') ?? 'cli'
         const expiresAt = flags.get('expires-at') ?? null
@@ -200,7 +201,7 @@ export async function runCli(argv: string[], io: CliIo = {}): Promise<number> {
 
       if (subcommand === 'remove') {
         const { positional, flags } = parseFlags(rest)
-        const userId = positional[0]
+        const userId = positional[0] ? normalizeUserId(positional[0]) : ''
         const dbUrl = flags.get('db') ?? process.env.DATABASE_URL
 
         if (!userId || !dbUrl) {
@@ -259,7 +260,7 @@ export async function runCli(argv: string[], io: CliIo = {}): Promise<number> {
 
       const flagArgs = isDirectAlias ? (subcommand ? [subcommand, ...rest] : rest) : rest
       const { positional, flags } = parseFlags(flagArgs)
-      const userId = positional[0]
+      const userId = positional[0] ? normalizeUserId(positional[0]) : ''
       const deleteBan = flags.get('delete-ban') === 'true' || flags.get('include-bans') === 'true'
       const dbUrl = flags.get('db') ?? process.env.DATABASE_URL
 

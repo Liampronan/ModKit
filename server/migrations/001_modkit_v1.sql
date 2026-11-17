@@ -99,10 +99,10 @@ CREATE OR REPLACE FUNCTION modkit.is_banned(check_user_id text)
 RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = modkit, public AS $$
   SELECT CASE
-    WHEN check_user_id IS NULL THEN false
+    WHEN check_user_id IS NULL OR btrim(check_user_id) = '' THEN false
     ELSE EXISTS (
       SELECT 1 FROM modkit.bans b
-      WHERE b.user_id = check_user_id
+      WHERE lower(b.user_id) = lower(btrim(check_user_id))
         AND (b.expires_at IS NULL OR b.expires_at > now())
     )
   END;
@@ -113,10 +113,11 @@ CREATE OR REPLACE FUNCTION modkit.is_blocked(viewer_id text, author_id text)
 RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = modkit, public AS $$
   SELECT CASE
-    WHEN viewer_id IS NULL OR author_id IS NULL THEN false
+    WHEN viewer_id IS NULL OR author_id IS NULL OR btrim(viewer_id) = '' OR btrim(author_id) = '' THEN false
     ELSE EXISTS (
       SELECT 1 FROM modkit.blocks bl
-      WHERE bl.blocker_id = viewer_id AND bl.blocked_id = author_id
+      WHERE lower(bl.blocker_id) = lower(btrim(viewer_id))
+        AND lower(bl.blocked_id) = lower(btrim(author_id))
     )
   END;
 $$;
@@ -139,7 +140,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = modkit, public AS $$
     AND NOT EXISTS (
       SELECT 1 FROM modkit.reports r
       WHERE viewer_id IS NOT NULL
-        AND r.reporter_id = viewer_id
+        AND lower(r.reporter_id) = lower(btrim(viewer_id))
         AND r.target_type = p_target_type
         AND r.target_id = p_target_id
     )
@@ -148,13 +149,13 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = modkit, public AS $$
         SELECT CASE
           WHEN i.status IN ('rejected', 'flagged') THEN false
           WHEN i.status = 'approved' THEN true
-          WHEN i.status = 'pending' THEN (mode = 'post' OR (viewer_id IS NOT NULL AND viewer_id = author_id))
+          WHEN i.status = 'pending' THEN (mode = 'post' OR (viewer_id IS NOT NULL AND lower(btrim(viewer_id)) = lower(btrim(author_id))))
           ELSE false
         END
         FROM modkit.items i
         WHERE i.target_type = p_target_type AND i.target_id = p_target_id
       ),
-      (mode = 'post' OR (viewer_id IS NOT NULL AND viewer_id = author_id))
+      (mode = 'post' OR (viewer_id IS NOT NULL AND lower(btrim(viewer_id)) = lower(btrim(author_id))))
     );
 $$;
 
@@ -176,7 +177,7 @@ CREATE OR REPLACE FUNCTION modkit.delete_user_data(
 RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = modkit, public AS $$
 DECLARE
-  v_user_id text := btrim(COALESCE(p_user_id, ''));
+  v_user_id text := lower(btrim(COALESCE(p_user_id, '')));
   v_terms integer := 0;
   v_blocks integer := 0;
   v_reports integer := 0;
@@ -189,24 +190,24 @@ BEGIN
   END IF;
 
   DELETE FROM modkit.terms_acceptances
-  WHERE user_id = v_user_id;
+  WHERE lower(user_id) = v_user_id;
   GET DIAGNOSTICS v_terms = ROW_COUNT;
 
   DELETE FROM modkit.blocks
-  WHERE blocker_id = v_user_id OR blocked_id = v_user_id;
+  WHERE lower(blocker_id) = v_user_id OR lower(blocked_id) = v_user_id;
   GET DIAGNOSTICS v_blocks = ROW_COUNT;
 
   DELETE FROM modkit.reports
-  WHERE reporter_id = v_user_id;
+  WHERE lower(reporter_id) = v_user_id;
   GET DIAGNOSTICS v_reports = ROW_COUNT;
 
   DELETE FROM modkit.items
-  WHERE author_id = v_user_id;
+  WHERE lower(author_id) = v_user_id;
   GET DIAGNOSTICS v_items = ROW_COUNT;
 
   IF COALESCE(p_delete_ban, false) THEN
     DELETE FROM modkit.bans
-    WHERE user_id = v_user_id;
+    WHERE lower(user_id) = v_user_id;
     GET DIAGNOSTICS v_bans = ROW_COUNT;
   END IF;
 

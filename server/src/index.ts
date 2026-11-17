@@ -3,6 +3,7 @@ export {
   MODKIT_ITEM_STATUSES,
   MODKIT_REPORT_REASONS,
   MODKIT_REPORT_STATUSES,
+  normalizeUserId,
   type AcceptTermsInput,
   type AddBanInput,
   type BlockUserInput,
