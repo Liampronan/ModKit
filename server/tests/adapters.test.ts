@@ -219,6 +219,118 @@ test('openAIClassifier sends multimodal payload and aggregates categories/scores
   assert.deepEqual(result.scores, { 'sexual/minors': 0.001, violence: 0.94 })
 })
 
+test('openAIClassifier splits multiple images into parallel single-image requests, merges max scores, and includes error body on failure', async () => {
+  const sentInputs: Array<Array<{ type: string; text?: string; image_url?: { url: string } }>> = []
+  let inFlight = 0
+  let maxConcurrent = 0
+
+  const classifier = openAIClassifier({
+    apiKey: 'sk-test-123',
+    fetchImpl: async (_input, init) => {
+      inFlight += 1
+      maxConcurrent = Math.max(maxConcurrent, inFlight)
+      await new Promise((r) => setTimeout(r, 15))
+      inFlight -= 1
+
+      const body = JSON.parse(String(init?.body)) as {
+        model: string
+        input: Array<{ type: string; text?: string; image_url?: { url: string } }>
+      }
+      sentInputs.push(body.input)
+
+      const imageParts = body.input.filter((part) => part.type === 'image_url')
+      if (imageParts.length > 1) {
+        return new Response(
+          JSON.stringify({
+            error: { message: 'At most 1 image is allowed per moderation request.' },
+          }),
+          { status: 400 },
+        )
+      }
+
+      const imageUrl = imageParts[0]?.image_url?.url ?? ''
+      if (imageUrl.includes('img2.jpg')) {
+        return Response.json({
+          results: [
+            {
+              flagged: true,
+              categories: { sexual: false, violence: true },
+              category_scores: { sexual: 0.02, violence: 0.91 },
+            },
+          ],
+        })
+      }
+
+      return Response.json({
+        results: [
+          {
+            flagged: false,
+            categories: { sexual: false, violence: false },
+            category_scores: { sexual: 0.15, violence: 0.04 },
+          },
+        ],
+      })
+    },
+  })
+
+  const merged = await classifier.classify({
+    text: 'Before and after pickup photos',
+    imageUrls: [
+      'https://example.supabase.co/storage/v1/object/sign/bucket/img1.jpg?token=1',
+      'https://example.supabase.co/storage/v1/object/sign/bucket/img2.jpg?token=2',
+    ],
+  })
+
+  assert.equal(sentInputs.length, 2)
+  assert.equal(maxConcurrent, 2)
+  for (const inputParts of sentInputs) {
+    const imageCount = inputParts.filter((p) => p.type === 'image_url').length
+    assert.ok(imageCount <= 1, `Expected at most 1 image per request, got ${imageCount}`)
+  }
+  assert.deepEqual(sentInputs[0], [
+    { type: 'text', text: 'Before and after pickup photos' },
+    {
+      type: 'image_url',
+      image_url: {
+        url: 'https://example.supabase.co/storage/v1/object/sign/bucket/img1.jpg?token=1',
+      },
+    },
+  ])
+  assert.deepEqual(sentInputs[1], [
+    {
+      type: 'image_url',
+      image_url: {
+        url: 'https://example.supabase.co/storage/v1/object/sign/bucket/img2.jpg?token=2',
+      },
+    },
+  ])
+
+  assert.equal(merged.flagged, true)
+  assert.deepEqual(merged.categories, { sexual: false, violence: true })
+  assert.deepEqual(merged.scores, { sexual: 0.15, violence: 0.91 })
+
+  // Verify OpenAI's error response body is included in thrown ModKitError
+  const failingClassifier = openAIClassifier({
+    apiKey: 'sk-test-123',
+    fetchImpl: async () =>
+      new Response('{"error":{"message":"Invalid image URL provided"}}', {
+        status: 400,
+      }),
+  })
+
+  await assert.rejects(
+    () =>
+      failingClassifier.classify({
+        imageUrls: ['https://example.com/bad.jpg'],
+      }),
+    (err: unknown) =>
+      err instanceof ModKitError &&
+      err.code === 'classifier_error' &&
+      err.message.includes('400') &&
+      err.message.includes('Invalid image URL provided'),
+  )
+})
+
 test('rekognitionClassifier signs SigV4 request and evaluates ModerationLabels threshold', async () => {
   const calls: { url: string; headers: Record<string, string>; body: string }[] = []
   const classifier = rekognitionClassifier({
