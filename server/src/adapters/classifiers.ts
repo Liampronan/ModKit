@@ -61,19 +61,29 @@ export function openAIClassifier(options: OpenAIClassifierOptions): ModKitClassi
   return {
     name: 'openai',
     async classify(input: ModKitClassificationInput): Promise<ModKitClassificationResult> {
-      const parts: OpenAIModerationInputPart[] = []
       const text = input.text?.trim() ?? ''
-      if (text.length > 0) {
-        parts.push({ type: 'text', text })
-      }
-      for (const rawUrl of input.imageUrls ?? []) {
-        const url = rawUrl.trim()
-        if (url.length > 0) {
-          parts.push({ type: 'image_url', image_url: { url } })
+      const imageUrls = (input.imageUrls ?? []).map((u) => u.trim()).filter((u) => u.length > 0)
+
+      const batches: OpenAIModerationInputPart[][] = []
+      if (imageUrls.length === 0) {
+        if (text.length > 0) {
+          batches.push([{ type: 'text', text }])
+        }
+      } else {
+        for (let i = 0; i < imageUrls.length; i++) {
+          const imagePart: OpenAIModerationInputPart = {
+            type: 'image_url',
+            image_url: { url: imageUrls[i]! },
+          }
+          if (i === 0 && text.length > 0) {
+            batches.push([{ type: 'text', text }, imagePart])
+          } else {
+            batches.push([imagePart])
+          }
         }
       }
 
-      if (parts.length === 0) {
+      if (batches.length === 0) {
         return {
           provider: 'openai',
           flagged: false,
@@ -82,69 +92,81 @@ export function openAIClassifier(options: OpenAIClassifierOptions): ModKitClassi
         }
       }
 
-      let response: Response
-      try {
-        response = await fetchFn(endpoint, {
-          method: 'POST',
-          headers: {
-            authorization: `Bearer ${apiKey}`,
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({
-            model,
-            input: parts,
-          }),
-        })
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : 'network error'
-        throw new ModKitError(
-          502,
-          'classifier_error',
-          `OpenAI moderation request failed: ${reason}`,
-        )
-      }
+      const payloads = await Promise.all(
+        batches.map(async (parts): Promise<OpenAIModerationResponse> => {
+          let response: Response
+          try {
+            response = await fetchFn(endpoint, {
+              method: 'POST',
+              headers: {
+                authorization: `Bearer ${apiKey}`,
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify({
+                model,
+                input: parts,
+              }),
+            })
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : 'network error'
+            throw new ModKitError(
+              502,
+              'classifier_error',
+              `OpenAI moderation request failed: ${reason}`,
+            )
+          }
 
-      if (!response.ok) {
-        throw new ModKitError(
-          502,
-          'classifier_error',
-          `OpenAI moderation API failed with status ${response.status}.`,
-        )
-      }
+          if (!response.ok) {
+            let errorBody = ''
+            try {
+              errorBody = (await response.text()).trim()
+            } catch {
+              // Ignore failure reading error body
+            }
+            const detailSuffix = errorBody ? `: ${errorBody}` : '.'
+            throw new ModKitError(
+              502,
+              'classifier_error',
+              `OpenAI moderation API failed with status ${response.status}${detailSuffix}`,
+            )
+          }
 
-      let payload: OpenAIModerationResponse
-      try {
-        payload = (await response.json()) as OpenAIModerationResponse
-      } catch {
-        throw new ModKitError(
-          502,
-          'classifier_error',
-          'OpenAI moderation API returned invalid JSON.',
-        )
-      }
+          try {
+            return (await response.json()) as OpenAIModerationResponse
+          } catch {
+            throw new ModKitError(
+              502,
+              'classifier_error',
+              'OpenAI moderation API returned invalid JSON.',
+            )
+          }
+        }),
+      )
 
-      const results = Array.isArray(payload.results) ? payload.results : []
       let flagged = false
       const categories: Record<string, boolean> = {}
       const scores: Record<string, number> = {}
 
-      for (const result of results) {
-        if (result.flagged) {
-          flagged = true
-        }
-        if (result.categories && typeof result.categories === 'object') {
-          for (const [key, val] of Object.entries(result.categories)) {
-            const isTrue = Boolean(val)
-            categories[key] = Boolean(categories[key] || isTrue)
-            if (isTrue) {
-              flagged = true
+      for (const payload of payloads) {
+        const results = Array.isArray(payload.results) ? payload.results : []
+        for (const result of results) {
+          if (result.flagged) {
+            flagged = true
+          }
+          if (result.categories && typeof result.categories === 'object') {
+            for (const [key, val] of Object.entries(result.categories)) {
+              const isTrue = Boolean(val)
+              categories[key] = Boolean(categories[key] || isTrue)
+              if (isTrue) {
+                flagged = true
+              }
             }
           }
-        }
-        if (result.category_scores && typeof result.category_scores === 'object') {
-          for (const [key, val] of Object.entries(result.category_scores)) {
-            const numericScore = typeof val === 'number' && Number.isFinite(val) ? val : 0
-            scores[key] = Math.max(scores[key] ?? 0, numericScore)
+          if (result.category_scores && typeof result.category_scores === 'object') {
+            for (const [key, val] of Object.entries(result.category_scores)) {
+              const numericScore = typeof val === 'number' && Number.isFinite(val) ? val : 0
+              scores[key] = Math.max(scores[key] ?? 0, numericScore)
+            }
           }
         }
       }
