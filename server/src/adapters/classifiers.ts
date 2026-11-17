@@ -15,6 +15,7 @@ export interface ModKitClassificationResult {
   flagged: boolean
   categories: Record<string, boolean>
   scores: Record<string, number>
+  partialErrors?: string[] | undefined
 }
 
 export interface ModKitClassifier {
@@ -27,6 +28,26 @@ export interface OpenAIClassifierOptions {
   model?: string | undefined
   endpoint?: string | undefined
   fetchImpl?: typeof globalThis.fetch | undefined
+  /**
+   * When true, fetches `http(s)://` image URLs in the server/edge function and sends
+   * `data:<mime>;base64,...` URIs to OpenAI. Even when false (default), `openAIClassifier`
+   * automatically falls back to fetching and inlining an image if OpenAI returns
+   * `"Failed to download image"`.
+   */
+  inlineImages?: boolean | undefined
+  /**
+   * Maximum allowed image size in bytes when inlining images (defaults to 10 MiB).
+   */
+  maxImageBytes?: number | undefined
+  /**
+   * Number of retry attempts for transient failures (`429`, `5xx`, network errors, or
+   * OpenAI `"Failed to download image"` errors). Defaults to `2`.
+   */
+  maxRetries?: number | undefined
+  /**
+   * Base backoff delay in milliseconds between retries. Defaults to `200`.
+   */
+  retryBaseDelayMs?: number | undefined
 }
 
 interface OpenAIModerationInputPart {
@@ -45,6 +66,94 @@ interface OpenAIModerationResponse {
   results?: OpenAIModerationResult[]
 }
 
+const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const DEFAULT_MAX_RETRIES = 2
+const DEFAULT_RETRY_BASE_DELAY_MS = 200
+
+function inferImageMimeType(url: string, contentTypeHeader: string | null): string {
+  if (contentTypeHeader) {
+    const cleaned = contentTypeHeader.split(';')[0]?.trim().toLowerCase()
+    if (cleaned && cleaned.startsWith('image/')) {
+      return cleaned
+    }
+  }
+  const lowerPath = url.split('?')[0]?.toLowerCase() ?? ''
+  if (lowerPath.endsWith('.png')) return 'image/png'
+  if (lowerPath.endsWith('.webp')) return 'image/webp'
+  if (lowerPath.endsWith('.gif')) return 'image/gif'
+  return 'image/jpeg'
+}
+
+async function fetchImageAsDataUri(
+  imageUrl: string,
+  fetchFn: typeof globalThis.fetch,
+  maxBytes: number,
+): Promise<string> {
+  if (imageUrl.startsWith('data:')) {
+    return imageUrl
+  }
+
+  let response: Response
+  try {
+    response = await fetchFn(imageUrl)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'network error'
+    throw new ModKitError(
+      502,
+      'classifier_image_fetch_error',
+      `Failed to fetch image for OpenAI classification: ${reason}`,
+    )
+  }
+
+  if (!response.ok) {
+    throw new ModKitError(
+      502,
+      'classifier_image_fetch_error',
+      `Failed to fetch image for OpenAI classification (status ${response.status}).`,
+    )
+  }
+
+  const contentLengthHeader = response.headers.get('content-length')
+  if (contentLengthHeader) {
+    const declaredBytes = Number(contentLengthHeader)
+    if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
+      throw new ModKitError(
+        413,
+        'classifier_image_too_large',
+        `Image size (${declaredBytes} bytes) exceeds maximum allowed size of ${maxBytes} bytes.`,
+      )
+    }
+  }
+
+  const arrayBuffer = await response.arrayBuffer()
+  if (arrayBuffer.byteLength > maxBytes) {
+    throw new ModKitError(
+      413,
+      'classifier_image_too_large',
+      `Image size (${arrayBuffer.byteLength} bytes) exceeds maximum allowed size of ${maxBytes} bytes.`,
+    )
+  }
+
+  const mimeType = inferImageMimeType(imageUrl, response.headers.get('content-type'))
+  const base64 = Buffer.from(arrayBuffer).toString('base64')
+  return `data:${mimeType};base64,${base64}`
+}
+
+function isDownloadImageFailure(status: number, errorBody: string): boolean {
+  if (status !== 400) return false
+  const lower = errorBody.toLowerCase()
+  return lower.includes('failed to download image') || lower.includes('could not download image')
+}
+
+function isRetryableStatus(status: number, errorBody: string): boolean {
+  return status === 429 || status >= 500 || isDownloadImageFailure(status, errorBody)
+}
+
+async function sleepMs(ms: number): Promise<void> {
+  if (ms <= 0) return
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 /**
  * Multimodal content moderation classifier backed by OpenAI's `/v1/moderations` endpoint
  * (`omni-moderation-latest`), supporting both text and image URLs/data-URIs.
@@ -57,6 +166,124 @@ export function openAIClassifier(options: OpenAIClassifierOptions): ModKitClassi
   const model = options.model ?? 'omni-moderation-latest'
   const endpoint = options.endpoint ?? 'https://api.openai.com/v1/moderations'
   const fetchFn = options.fetchImpl ?? globalThis.fetch
+  const inlineImages = options.inlineImages ?? false
+  const maxImageBytes = options.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES
+  const maxRetries = Math.max(0, options.maxRetries ?? DEFAULT_MAX_RETRIES)
+  const retryBaseDelayMs = Math.max(0, options.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS)
+
+  async function sendBatchWithRetry(
+    initialParts: OpenAIModerationInputPart[],
+  ): Promise<OpenAIModerationResponse> {
+    let parts: OpenAIModerationInputPart[] = initialParts.map((part) =>
+      part.type === 'image_url' && part.image_url
+        ? { type: 'image_url', image_url: { url: part.image_url.url } }
+        : { ...part },
+    )
+
+    if (inlineImages) {
+      parts = await Promise.all(
+        parts.map(async (part): Promise<OpenAIModerationInputPart> => {
+          if (part.type === 'image_url' && part.image_url && !part.image_url.url.startsWith('data:')) {
+            const dataUri = await fetchImageAsDataUri(part.image_url.url, fetchFn, maxImageBytes)
+            return { type: 'image_url', image_url: { url: dataUri } }
+          }
+          return part
+        }),
+      )
+    }
+
+    let lastError: ModKitError | null = null
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        await sleepMs(retryBaseDelayMs * 2 ** (attempt - 1))
+      }
+
+      let response: Response
+      try {
+        response = await fetchFn(endpoint, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${apiKey}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model,
+            input: parts,
+          }),
+        })
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'network error'
+        lastError = new ModKitError(
+          502,
+          'classifier_error',
+          `OpenAI moderation request failed: ${reason}`,
+        )
+        if (attempt < maxRetries) {
+          continue
+        }
+        throw lastError
+      }
+
+      if (!response.ok) {
+        let errorBody = ''
+        try {
+          errorBody = (await response.text()).trim()
+        } catch {
+          // Ignore failure reading error body
+        }
+        const detailSuffix = errorBody ? `: ${errorBody}` : '.'
+        lastError = new ModKitError(
+          502,
+          'classifier_error',
+          `OpenAI moderation API failed with status ${response.status}${detailSuffix}`,
+        )
+
+        if (attempt < maxRetries && isRetryableStatus(response.status, errorBody)) {
+          if (isDownloadImageFailure(response.status, errorBody)) {
+            parts = await Promise.all(
+              parts.map(async (part): Promise<OpenAIModerationInputPart> => {
+                if (
+                  part.type === 'image_url' &&
+                  part.image_url &&
+                  !part.image_url.url.startsWith('data:')
+                ) {
+                  const dataUri = await fetchImageAsDataUri(
+                    part.image_url.url,
+                    fetchFn,
+                    maxImageBytes,
+                  )
+                  return { type: 'image_url', image_url: { url: dataUri } }
+                }
+                return part
+              }),
+            )
+          }
+          continue
+        }
+
+        throw lastError
+      }
+
+      try {
+        return (await response.json()) as OpenAIModerationResponse
+      } catch {
+        lastError = new ModKitError(
+          502,
+          'classifier_error',
+          'OpenAI moderation API returned invalid JSON.',
+        )
+        if (attempt < maxRetries) {
+          continue
+        }
+        throw lastError
+      }
+    }
+
+    throw (
+      lastError ??
+      new ModKitError(502, 'classifier_error', 'OpenAI moderation classification failed.')
+    )
+  }
 
   return {
     name: 'openai',
@@ -92,62 +319,26 @@ export function openAIClassifier(options: OpenAIClassifierOptions): ModKitClassi
         }
       }
 
-      const payloads = await Promise.all(
-        batches.map(async (parts): Promise<OpenAIModerationResponse> => {
-          let response: Response
-          try {
-            response = await fetchFn(endpoint, {
-              method: 'POST',
-              headers: {
-                authorization: `Bearer ${apiKey}`,
-                'content-type': 'application/json',
-              },
-              body: JSON.stringify({
-                model,
-                input: parts,
-              }),
-            })
-          } catch (error) {
-            const reason = error instanceof Error ? error.message : 'network error'
-            throw new ModKitError(
-              502,
-              'classifier_error',
-              `OpenAI moderation request failed: ${reason}`,
-            )
-          }
-
-          if (!response.ok) {
-            let errorBody = ''
-            try {
-              errorBody = (await response.text()).trim()
-            } catch {
-              // Ignore failure reading error body
-            }
-            const detailSuffix = errorBody ? `: ${errorBody}` : '.'
-            throw new ModKitError(
-              502,
-              'classifier_error',
-              `OpenAI moderation API failed with status ${response.status}${detailSuffix}`,
-            )
-          }
-
-          try {
-            return (await response.json()) as OpenAIModerationResponse
-          } catch {
-            throw new ModKitError(
-              502,
-              'classifier_error',
-              'OpenAI moderation API returned invalid JSON.',
-            )
-          }
-        }),
-      )
+      const settled = await Promise.allSettled(batches.map((parts) => sendBatchWithRetry(parts)))
 
       let flagged = false
       const categories: Record<string, boolean> = {}
       const scores: Record<string, number> = {}
+      const partialErrors: string[] = []
+      let firstError: unknown = null
 
-      for (const payload of payloads) {
+      for (const outcome of settled) {
+        if (outcome.status === 'rejected') {
+          if (!firstError) {
+            firstError = outcome.reason
+          }
+          const msg =
+            outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)
+          partialErrors.push(msg)
+          continue
+        }
+
+        const payload = outcome.value
         const results = Array.isArray(payload.results) ? payload.results : []
         for (const result of results) {
           if (result.flagged) {
@@ -169,6 +360,22 @@ export function openAIClassifier(options: OpenAIClassifierOptions): ModKitClassi
             }
           }
         }
+      }
+
+      if (partialErrors.length > 0) {
+        if (flagged) {
+          categories.classification_error = true
+          return {
+            provider: 'openai',
+            flagged: true,
+            categories,
+            scores,
+            partialErrors,
+          }
+        }
+        throw firstError instanceof Error
+          ? firstError
+          : new ModKitError(502, 'classifier_error', partialErrors.join('; '))
       }
 
       return {

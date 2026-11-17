@@ -10,6 +10,7 @@ export {
   type CheckRateLimitInput,
   type CreateReportInput,
   type DeleteUserDataInput,
+  type ListItemsFilter,
   type ListReportsFilter,
   type ModKitBanRecord,
   type ModKitBlockRecord,
