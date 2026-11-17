@@ -444,6 +444,115 @@ test('openAIClassifier splits multiple images into parallel single-image request
   )
 })
 
+test('openAIClassifier retries "Failed to download image" by inlining data URI, supports inlineImages/maxImageBytes, and preserves flagged results on partial failures (#18)', async () => {
+  const moderationPayloads: Array<Array<{ type: string; image_url?: { url: string } }>> = []
+  let openAiAttempt = 0
+  let imageFetchCount = 0
+
+  const autoInlineClassifier = openAIClassifier({
+    apiKey: 'sk-test-123',
+    retryBaseDelayMs: 1,
+    fetchImpl: async (input, init) => {
+      const url = String(input)
+      if (url.startsWith('https://storage.example.com/')) {
+        imageFetchCount += 1
+        return new Response(Uint8Array.from([0xff, 0xd8, 0xff, 0xe0]), {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        })
+      }
+
+      openAiAttempt += 1
+      const parsed = JSON.parse(String(init?.body)) as {
+        input: Array<{ type: string; image_url?: { url: string } }>
+      }
+      moderationPayloads.push(parsed.input)
+
+      if (openAiAttempt === 1) {
+        return new Response(
+          JSON.stringify({
+            error: { message: 'Failed to download image.', type: 'invalid_request_error' },
+          }),
+          { status: 400 },
+        )
+      }
+
+      return Response.json({
+        results: [
+          {
+            flagged: false,
+            categories: { violence: false },
+            category_scores: { violence: 0.01 },
+          },
+        ],
+      })
+    },
+  })
+
+  const res = await autoInlineClassifier.classify({
+    imageUrls: ['https://storage.example.com/pickup-1mb.jpg?token=signed'],
+  })
+  assert.equal(res.flagged, false)
+  assert.equal(openAiAttempt, 2)
+  assert.equal(imageFetchCount, 1)
+  assert.equal(
+    moderationPayloads[0]?.[0]?.image_url?.url,
+    'https://storage.example.com/pickup-1mb.jpg?token=signed',
+  )
+  assert.equal(
+    moderationPayloads[1]?.[0]?.image_url?.url,
+    `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString('base64')}`,
+  )
+
+  // maxImageBytes cap rejects oversized images when inlining
+  const cappedClassifier = openAIClassifier({
+    apiKey: 'sk-test-123',
+    inlineImages: true,
+    maxImageBytes: 4,
+    fetchImpl: async () =>
+      new Response(Uint8Array.from([1, 2, 3, 4, 5, 6]), {
+        status: 200,
+        headers: { 'content-type': 'image/jpeg' },
+      }),
+  })
+  await assert.rejects(
+    () => cappedClassifier.classify({ imageUrls: ['https://storage.example.com/huge.jpg'] }),
+    (err: unknown) => err instanceof ModKitError && err.code === 'classifier_image_too_large',
+  )
+
+  // Partial failure: if image 1 is flagged and image 2 permanently fails, flagged: true is preserved
+  const partialClassifier = openAIClassifier({
+    apiKey: 'sk-test-123',
+    maxRetries: 0,
+    fetchImpl: async (_input, init) => {
+      const parsed = JSON.parse(String(init?.body)) as {
+        input: Array<{ type: string; image_url?: { url: string } }>
+      }
+      const imgUrl = parsed.input.find((p) => p.type === 'image_url')?.image_url?.url ?? ''
+      if (imgUrl.includes('broken.jpg')) {
+        return new Response('{"error":{"message":"Upstream failure"}}', { status: 500 })
+      }
+      return Response.json({
+        results: [
+          {
+            flagged: true,
+            categories: { violence: true },
+            category_scores: { violence: 0.97 },
+          },
+        ],
+      })
+    },
+  })
+
+  const partialResult = await partialClassifier.classify({
+    imageUrls: ['https://storage.example.com/flagged.jpg', 'https://storage.example.com/broken.jpg'],
+  })
+  assert.equal(partialResult.flagged, true)
+  assert.equal(partialResult.categories.violence, true)
+  assert.equal(partialResult.categories.classification_error, true)
+  assert.equal(partialResult.partialErrors?.length, 1)
+})
+
 test('rekognitionClassifier signs SigV4 request and evaluates ModerationLabels threshold', async () => {
   const calls: { url: string; headers: Record<string, string>; body: string }[] = []
   const classifier = rekognitionClassifier({

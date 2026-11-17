@@ -10,6 +10,7 @@ import {
   type CheckRateLimitInput,
   type CreateReportInput,
   type DeleteUserDataInput,
+  type ListItemsFilter,
   type ListReportsFilter,
   type ModKitBanRecord,
   type ModKitBlockRecord,
@@ -367,6 +368,29 @@ export function memoryStore(): ModKitStore {
         classifier_categories: { ...row.classifier_categories },
         classifier_scores: { ...row.classifier_scores },
       }
+    },
+
+    async listItems(filter?: ListItemsFilter): Promise<ModKitItemRecord[]> {
+      let rows = Array.from(itemsByKey.values())
+      if (filter?.status) {
+        rows = rows.filter((i) => i.status === filter.status)
+      }
+      if (filter?.targetType) {
+        rows = rows.filter((i) => i.target_type === filter.targetType)
+      }
+      if (filter?.authorId) {
+        const targetAuthor = normalizeUserId(filter.authorId)
+        rows = rows.filter((i) => i.author_id === targetAuthor)
+      }
+      rows.sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+      if (filter?.limit !== undefined && filter.limit > 0) {
+        rows = rows.slice(0, filter.limit)
+      }
+      return rows.map((row) => ({
+        ...row,
+        classifier_categories: { ...row.classifier_categories },
+        classifier_scores: { ...row.classifier_scores },
+      }))
     },
 
     async addBan(input: AddBanInput): Promise<ModKitBanRecord> {

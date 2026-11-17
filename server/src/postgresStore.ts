@@ -11,6 +11,7 @@ import {
   type CheckRateLimitInput,
   type CreateReportInput,
   type DeleteUserDataInput,
+  type ListItemsFilter,
   type ListReportsFilter,
   type ModKitBanRecord,
   type ModKitBlockRecord,
@@ -527,6 +528,24 @@ export function postgresStore(options: PostgresStoreOptions): PostgresModKitStor
         LIMIT 1
       `
       return rows[0] ? mapItemRow(rows[0]) : null
+    },
+
+    async listItems(filter?: ListItemsFilter): Promise<ModKitItemRecord[]> {
+      const limit = filter?.limit && filter.limit > 0 ? filter.limit : 100
+      const status = filter?.status ?? null
+      const targetType = filter?.targetType ?? null
+      const authorId = filter?.authorId ? normalizeUserId(filter.authorId) : null
+
+      const rows = await sql<RawItemRow[]>`
+        SELECT *
+        FROM modkit.items
+        WHERE (${status}::text IS NULL OR status = ${status})
+          AND (${targetType}::text IS NULL OR target_type = ${targetType})
+          AND (${authorId}::text IS NULL OR lower(author_id) = ${authorId})
+        ORDER BY updated_at DESC
+        LIMIT ${limit}
+      `
+      return rows.map(mapItemRow)
     },
 
     async addBan(input: AddBanInput): Promise<ModKitBanRecord> {

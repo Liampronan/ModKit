@@ -6,8 +6,10 @@ import { fileURLToPath } from 'node:url'
 import { runConformanceSuite } from './conformance.js'
 import { postgresStore } from './postgresStore.js'
 import {
+  MODKIT_ITEM_STATUSES,
   MODKIT_REPORT_STATUSES,
   normalizeUserId,
+  type ModKitItemStatus,
   type ModKitReportStatus,
   type ModKitResolutionAction,
   type ModKitStore,
@@ -167,6 +169,52 @@ export async function runCli(argv: string[], io: CliIo = {}): Promise<number> {
       }
 
       stderr(`Error: Unknown reports subcommand: ${subcommand ?? ''}`)
+      return 1
+    }
+
+    if (group === 'items') {
+      if (subcommand === 'list') {
+        const { flags } = parseFlags(rest)
+        const dbUrl = flags.get('db') ?? process.env.DATABASE_URL
+        if (!dbUrl) {
+          stderr(
+            'Error: Missing --db <url> (or DATABASE_URL). Usage: modkit items list --db <url> [--status pending|approved|rejected|flagged]',
+          )
+          return 1
+        }
+
+        const statusRaw = flags.get('status')
+        let statusFilter: ModKitItemStatus | undefined
+        if (statusRaw !== undefined) {
+          if (!MODKIT_ITEM_STATUSES.includes(statusRaw as ModKitItemStatus)) {
+            stderr(
+              `Error: Invalid --status "${statusRaw}". Allowed: ${MODKIT_ITEM_STATUSES.join(', ')}`,
+            )
+            return 1
+          }
+          statusFilter = statusRaw as ModKitItemStatus
+        }
+
+        const store = createStore(dbUrl)
+        try {
+          const items = (await store.listItems?.({ status: statusFilter })) ?? []
+          if (items.length === 0) {
+            stdout('No items found.')
+            return 0
+          }
+          for (const item of items) {
+            stdout(
+              `${item.target_type}/${item.target_id}\t${item.status}\tauthor=${item.author_id}\tprovider=${item.classifier_provider ?? 'none'}\tcategories=${JSON.stringify(item.classifier_categories)}\t${item.updated_at}`,
+            )
+          }
+          stdout(`Listed ${items.length} item(s).`)
+          return 0
+        } finally {
+          await store.close?.()
+        }
+      }
+
+      stderr(`Error: Unknown items subcommand: ${subcommand ?? ''}`)
       return 1
     }
 
@@ -365,6 +413,7 @@ Usage:
   modkit migrations copy <dest-dir>
   modkit reports list --db <url> [--status open|actioned|dismissed]
   modkit reports resolve <report-id> --action <remove|dismiss|ban> [--note "..."] --db <url>
+  modkit items list --db <url> [--status pending|approved|rejected|flagged]
   modkit bans add <user-id> --reason "..." [--expires-at <iso>] --db <url>
   modkit bans remove <user-id> --db <url>
   modkit bans list --db <url>

@@ -134,6 +134,13 @@ export interface ListReportsFilter {
   limit?: number | undefined
 }
 
+export interface ListItemsFilter {
+  status?: ModKitItemStatus | undefined
+  targetType?: string | undefined
+  authorId?: string | undefined
+  limit?: number | undefined
+}
+
 export interface ResolveReportInput {
   reportId: string
   action: ModKitResolutionAction
@@ -203,6 +210,7 @@ export interface ModKitStore {
   resolveReport(input: ResolveReportInput): Promise<ModKitReportRecord | null>
   upsertItem(input: UpsertItemInput): Promise<ModKitItemRecord>
   getItem(targetType: string, targetId: string): Promise<ModKitItemRecord | null>
+  listItems?(filter?: ListItemsFilter): Promise<ModKitItemRecord[]>
   addBan(input: AddBanInput): Promise<ModKitBanRecord>
   removeBan(userId: string): Promise<boolean>
   isBanned(userId: string, now?: Date): Promise<boolean>

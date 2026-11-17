@@ -483,17 +483,33 @@ export function createModKitServer(
         let scores: Record<string, number> = {}
 
         if (options.classifier) {
-          const result = await options.classifier.classify({
-            targetType: extracted.targetType,
-            targetId: extracted.targetId,
-            authorId: normalizedAuthorId,
-            text: extracted.text,
-            imageUrls: extracted.imageUrls,
-          })
-          flagged = result.flagged
-          provider = result.provider
-          categories = result.categories
-          scores = result.scores
+          try {
+            const result = await options.classifier.classify({
+              targetType: extracted.targetType,
+              targetId: extracted.targetId,
+              authorId: normalizedAuthorId,
+              text: extracted.text,
+              imageUrls: extracted.imageUrls,
+            })
+            flagged = result.flagged
+            provider = result.provider
+            categories = result.categories
+            scores = result.scores
+          } catch (classifyError) {
+            await options.store
+              .upsertItem({
+                targetType: extracted.targetType,
+                targetId: extracted.targetId,
+                authorId: normalizedAuthorId,
+                status: 'pending',
+                classifierProvider: options.classifier.name,
+                classifierCategories: { classification_error: true },
+                classifierScores: {},
+                now: nowFn(),
+              })
+              .catch(() => {})
+            throw classifyError
+          }
         }
 
         const status = flagged ? 'rejected' : 'approved'

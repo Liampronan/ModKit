@@ -392,3 +392,48 @@ test('POST /v1/reports resolves author server-side, ignores client target_author
   )
   assert.equal(blockRateLimited.status, 429)
 })
+
+test('POST /v1/webhooks/content records pending item row with classification_error when classifier fails (#18)', async () => {
+  const store = memoryStore()
+  const handler = createModKitServer({
+    store,
+    authenticate: staticTokens({}),
+    webhookSecret: 'whsec-err',
+    classifier: {
+      name: 'openai',
+      async classify() {
+        throw new Error('Simulated OpenAI outage')
+      },
+    },
+  })
+
+  const res = await handler(
+    new Request('https://example.supabase.co/v1/webhooks/content', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-modkit-webhook-secret': 'whsec-err',
+      },
+      body: JSON.stringify({
+        type: 'INSERT',
+        table: 'trash_pickup',
+        record: {
+          id: 'pickup-unchecked-1',
+          user_id: 'USER-ABC',
+          description: 'Unchecked post',
+        },
+      }),
+    }),
+  )
+  assert.equal(res.status, 500)
+
+  const pendingItem = await store.getItem('trash_pickup', 'pickup-unchecked-1')
+  assert.ok(pendingItem)
+  assert.equal(pendingItem.status, 'pending')
+  assert.equal(pendingItem.author_id, 'user-abc')
+  assert.deepEqual(pendingItem.classifier_categories, { classification_error: true })
+
+  const pendingList = await store.listItems?.({ status: 'pending' })
+  assert.equal(pendingList?.length, 1)
+  assert.equal(pendingList?.[0]?.target_id, 'pickup-unchecked-1')
+})
