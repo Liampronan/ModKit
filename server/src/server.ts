@@ -35,6 +35,21 @@ export type ModKitContentExtractor = (
   payload: DatabaseWebhookPayload,
 ) => Promise<ExtractedContentItem | null> | ExtractedContentItem | null
 
+export interface ResolvedContentItem {
+  authorId: string
+}
+
+export type ModKitContentResolver = (
+  targetType: string,
+  targetId: string,
+) => Promise<ResolvedContentItem | null> | ResolvedContentItem | null
+
+export interface ModKitRateLimitConfig {
+  reportsPerWindow?: number | undefined
+  blocksPerWindow?: number | undefined
+  windowSeconds?: number | undefined
+}
+
 export interface ModKitServerOptions {
   store: ModKitStore
   authenticate: ModKitAuthenticator | ModKitAuthenticator[]
@@ -42,13 +57,17 @@ export interface ModKitServerOptions {
   notifier?: ModKitNotifier | ModKitNotifier[] | undefined
   webhookSecret?: string | undefined
   contentExtractor?: ModKitContentExtractor | undefined
+  resolveContent?: ModKitContentResolver | undefined
   autoHideOnReport?: boolean | undefined
+  rateLimit?: ModKitRateLimitConfig | false | undefined
   notifyOnRejectedContent?: boolean | undefined
   maxBodyBytes?: number | undefined
   now?: (() => Date) | undefined
 }
 
 const DEFAULT_MAX_BODY_BYTES = 256 * 1024
+const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 30
+const DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60
 
 const CORS_HEADERS: Record<string, string> = {
   'access-control-allow-origin': '*',
@@ -169,11 +188,41 @@ export function createModKitServer(
       ? options.notifier
       : [options.notifier]
     : []
-  const autoHideOnReport = options.autoHideOnReport ?? true
+  const autoHideOnReport = options.autoHideOnReport ?? false
   const notifyOnRejectedContent = options.notifyOnRejectedContent ?? true
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
   const nowFn = options.now ?? (() => new Date())
   const extractContent = options.contentExtractor ?? defaultContentExtractor
+  const rateLimitEnabled = options.rateLimit !== false
+  const rateLimitCfg =
+    options.rateLimit && typeof options.rateLimit === 'object' ? options.rateLimit : undefined
+  const reportsPerWindow = rateLimitCfg?.reportsPerWindow ?? DEFAULT_RATE_LIMIT_MAX_REQUESTS
+  const blocksPerWindow = rateLimitCfg?.blocksPerWindow ?? DEFAULT_RATE_LIMIT_MAX_REQUESTS
+  const rateLimitWindowSeconds = rateLimitCfg?.windowSeconds ?? DEFAULT_RATE_LIMIT_WINDOW_SECONDS
+
+  async function enforceRateLimit(
+    userId: string,
+    action: 'reports' | 'blocks',
+    maxRequests: number,
+  ): Promise<void> {
+    if (!rateLimitEnabled || !options.store.checkRateLimit) {
+      return
+    }
+    const result = await options.store.checkRateLimit({
+      userId,
+      action,
+      maxRequests,
+      windowSeconds: rateLimitWindowSeconds,
+      now: nowFn(),
+    })
+    if (!result.allowed) {
+      throw new ModKitError(
+        429,
+        'rate_limit_exceeded',
+        `Rate limit exceeded for ${action}. Try again in ${result.retryAfterSeconds}s.`,
+      )
+    }
+  }
 
   async function authenticateRequest(request: Request): Promise<ModKitAuthPrincipal> {
     for (const auth of authenticators) {
@@ -250,10 +299,6 @@ export function createModKitServer(
         const body = await readJsonBody(request, maxBodyBytes)
         const targetType = typeof body.target_type === 'string' ? body.target_type.trim() : ''
         const targetId = typeof body.target_id === 'string' ? body.target_id.trim() : ''
-        const targetAuthorId =
-          typeof body.target_author_id === 'string' && normalizeUserId(body.target_author_id).length > 0
-            ? normalizeUserId(body.target_author_id)
-            : null
         const reason = typeof body.reason === 'string' ? body.reason.trim() : ''
         const details =
           typeof body.details === 'string' && body.details.trim().length > 0
@@ -273,6 +318,26 @@ export function createModKitServer(
             'invalid_reason',
             `reason must be one of: ${MODKIT_REPORT_REASONS.join(', ')}.`,
           )
+        }
+
+        await enforceRateLimit(principal.userId, 'reports', reportsPerWindow)
+
+        // Resolve author server-side; never trust client-supplied target_author_id from request body
+        let targetAuthorId: string | null = null
+        if (options.resolveContent) {
+          const resolved = await options.resolveContent(targetType, targetId)
+          const resolvedAuthor = resolved?.authorId ? normalizeUserId(resolved.authorId) : ''
+          if (!resolved || !resolvedAuthor) {
+            throw new ModKitError(
+              404,
+              'content_not_found',
+              `Target content ${targetType}/${targetId} was not found.`,
+            )
+          }
+          targetAuthorId = resolvedAuthor
+        } else {
+          const existingItem = await options.store.getItem(targetType, targetId)
+          targetAuthorId = existingItem ? normalizeUserId(existingItem.author_id) : null
         }
 
         const report = await options.store.createReport({
@@ -322,6 +387,11 @@ export function createModKitServer(
             'blocked_user_id must be a non-empty string.',
           )
         }
+        if (principal.userId === blockedUserId) {
+          throw new ModKitError(400, 'self_block_forbidden', 'Users cannot block themselves.')
+        }
+
+        await enforceRateLimit(principal.userId, 'blocks', blocksPerWindow)
 
         const block = await options.store.blockUser({
           blockerId: principal.userId,

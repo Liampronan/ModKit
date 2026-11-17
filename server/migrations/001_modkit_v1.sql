@@ -63,6 +63,15 @@ CREATE TABLE IF NOT EXISTS modkit.reports (
   resolved_at timestamptz
 );
 
+-- 6. Per-user rate limit counters (persisted in Postgres for stateless edge runtimes)
+CREATE TABLE IF NOT EXISTS modkit.rate_limits (
+  user_id text NOT NULL,
+  action text NOT NULL,
+  window_start timestamptz NOT NULL DEFAULT now(),
+  request_count integer NOT NULL DEFAULT 1,
+  PRIMARY KEY (user_id, action)
+);
+
 -- Indexes for fast RLS visibility lookups and operator triage
 CREATE INDEX IF NOT EXISTS idx_blocks_blocked
   ON modkit.blocks (blocked_id);
@@ -91,6 +100,7 @@ ALTER TABLE modkit.blocks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE modkit.bans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE modkit.items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE modkit.reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE modkit.rate_limits ENABLE ROW LEVEL SECURITY;
 
 -- SQL Helper Functions (SECURITY DEFINER) for Host App RLS policies
 
@@ -204,6 +214,9 @@ BEGIN
   DELETE FROM modkit.items
   WHERE lower(author_id) = v_user_id;
   GET DIAGNOSTICS v_items = ROW_COUNT;
+
+  DELETE FROM modkit.rate_limits
+  WHERE lower(user_id) = v_user_id;
 
   IF COALESCE(p_delete_ban, false) THEN
     DELETE FROM modkit.bans

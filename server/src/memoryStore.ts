@@ -7,6 +7,7 @@ import {
   type AcceptTermsInput,
   type AddBanInput,
   type BlockUserInput,
+  type CheckRateLimitInput,
   type CreateReportInput,
   type DeleteUserDataInput,
   type ListReportsFilter,
@@ -15,6 +16,7 @@ import {
   type ModKitDeleteUserDataResult,
   type ModKitHiddenItem,
   type ModKitItemRecord,
+  type ModKitRateLimitResult,
   type ModKitReportRecord,
   type ModKitStore,
   type ModKitTermsAcceptanceRecord,
@@ -33,6 +35,7 @@ export function memoryStore(): ModKitStore {
   const bansByUser = new Map<string, ModKitBanRecord>()
   const itemsByKey = new Map<string, ModKitItemRecord>()
   const reportsById = new Map<string, ModKitReportRecord>()
+  const rateLimitsByKey = new Map<string, { windowStartMs: number; count: number }>()
 
   function itemKey(targetType: string, targetId: string): string {
     return `${targetType}\u0000${targetId}`
@@ -188,7 +191,7 @@ export function memoryStore(): ModKitStore {
       }
       reportsById.set(id, report)
 
-      if (input.autoFlagItem ?? true) {
+      if (input.autoFlagItem ?? false) {
         const key = itemKey(targetType, targetId)
         const existingItem = itemsByKey.get(key)
         if (existingItem) {
@@ -455,6 +458,12 @@ export function memoryStore(): ModKitStore {
         bansDeleted = 1
       }
 
+      for (const rlKey of rateLimitsByKey.keys()) {
+        if (rlKey.startsWith(`${userId}\u0000`)) {
+          rateLimitsByKey.delete(rlKey)
+        }
+      }
+
       return {
         user_id: userId,
         terms_deleted: termsDeleted,
@@ -462,6 +471,41 @@ export function memoryStore(): ModKitStore {
         reports_deleted: reportsDeleted,
         items_deleted: itemsDeleted,
         bans_deleted: bansDeleted,
+      }
+    },
+
+    async checkRateLimit(input: CheckRateLimitInput): Promise<ModKitRateLimitResult> {
+      const userId = normalizeUserId(input.userId)
+      const action = input.action.trim()
+      if (!userId || !action) {
+        throw new ModKitError(400, 'invalid_rate_limit', 'userId and action must be non-empty strings.')
+      }
+      const maxRequests = Math.max(1, Math.floor(input.maxRequests))
+      const windowSeconds = Math.max(1, Math.floor(input.windowSeconds))
+      const windowMs = windowSeconds * 1000
+      const nowMs = (input.now ?? new Date()).getTime()
+      const key = `${userId}\u0000${action}`
+
+      const existing = rateLimitsByKey.get(key)
+      let windowStartMs = nowMs
+      let count = 1
+      if (existing && existing.windowStartMs + windowMs > nowMs) {
+        windowStartMs = existing.windowStartMs
+        count = existing.count + 1
+      }
+      rateLimitsByKey.set(key, { windowStartMs, count })
+
+      const allowed = count <= maxRequests
+      const remaining = Math.max(0, maxRequests - count)
+      const retryAfterSeconds = allowed
+        ? 0
+        : Math.max(1, Math.ceil((windowStartMs + windowMs - nowMs) / 1000))
+
+      return {
+        allowed,
+        count,
+        remaining,
+        retryAfterSeconds,
       }
     },
   }

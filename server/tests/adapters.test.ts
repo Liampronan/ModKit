@@ -71,8 +71,8 @@ async function runStoreContractTests(store: ModKitStore): Promise<void> {
   assert.equal(blockRecord.blocker_id, userA)
   assert.equal(blockRecord.blocked_user_id, userB)
 
-  // Submitting report creates hidden_items entry and auto-flags item
-  const report = await store.createReport({
+  // Submitting report creates hidden_items entry for reporter without auto-flagging item globally by default (#12)
+  const reportDefault = await store.createReport({
     reporterId: userA,
     targetType: 'trash_pickup',
     targetId: 'pickup-101',
@@ -81,8 +81,28 @@ async function runStoreContractTests(store: ModKitStore): Promise<void> {
     details: 'Inappropriate photo',
     now: t1,
   })
-  assert.equal(report.status, 'open')
-  assert.equal(report.reason, 'objectionable')
+  assert.equal(reportDefault.status, 'open')
+  assert.equal(reportDefault.reason, 'objectionable')
+  assert.equal(await store.getItem('trash_pickup', 'pickup-101'), null)
+  await store.resolveReport({
+    reportId: reportDefault.id,
+    action: 'dismiss',
+    note: 'Checked default non-flagged report',
+    resolvedBy: 'admin-1',
+    now: t1,
+  })
+
+  // Explicit autoFlagItem: true flags the item globally
+  const report = await store.createReport({
+    reporterId: userA,
+    targetType: 'trash_pickup',
+    targetId: 'pickup-101',
+    targetAuthorId: userB,
+    reason: 'objectionable',
+    details: 'Inappropriate photo (auto-flag)',
+    autoFlagItem: true,
+    now: t1,
+  })
 
   const itemAfterReport = await store.getItem('trash_pickup', 'pickup-101')
   assert.ok(itemAfterReport)
@@ -207,6 +227,54 @@ async function runStoreContractTests(store: ModKitStore): Promise<void> {
   const deletedWithBan = await store.deleteUserData({ userId: userD, deleteBan: true })
   assert.equal(deletedWithBan.bans_deleted, 1)
   assert.equal(await store.isBanned(userD, t2), false)
+
+  // Per-user rate limiting (#12)
+  if (store.checkRateLimit) {
+    const rl1 = await store.checkRateLimit({
+      userId: userA,
+      action: 'reports',
+      maxRequests: 2,
+      windowSeconds: 60,
+      now: t1,
+    })
+    assert.equal(rl1.allowed, true)
+    assert.equal(rl1.count, 1)
+    assert.equal(rl1.remaining, 1)
+
+    const rl2 = await store.checkRateLimit({
+      userId: userA,
+      action: 'reports',
+      maxRequests: 2,
+      windowSeconds: 60,
+      now: t1,
+    })
+    assert.equal(rl2.allowed, true)
+    assert.equal(rl2.count, 2)
+    assert.equal(rl2.remaining, 0)
+
+    const rl3 = await store.checkRateLimit({
+      userId: userA,
+      action: 'reports',
+      maxRequests: 2,
+      windowSeconds: 60,
+      now: t1,
+    })
+    assert.equal(rl3.allowed, false)
+    assert.equal(rl3.count, 3)
+    assert.ok(rl3.retryAfterSeconds > 0)
+
+    // Window reset after 61 seconds
+    const afterWindow = new Date(t1.getTime() + 61_000)
+    const rlReset = await store.checkRateLimit({
+      userId: userA,
+      action: 'reports',
+      maxRequests: 2,
+      windowSeconds: 60,
+      now: afterWindow,
+    })
+    assert.equal(rlReset.allowed, true)
+    assert.equal(rlReset.count, 1)
+  }
 }
 
 test('memoryStore satisfies ModKitStore contract', async () => {
